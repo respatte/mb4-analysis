@@ -1,0 +1,384 @@
+---
+title: "MB4 Data Simulations and Analysis"
+author: "Kelsey Lucca, Arthur Capelier-Mourguy, & Mike Frank"
+date: "10/29/2019"
+abstract: "This document provides evidence from simulated data for choices made in the ManyBabies4 study. Using data constructed with respects to the MB4 study structure and with effect sizes as predicted by a recent meta-analysis, we show that (a) models converge better when using scaled and centred, instead of raw, age in days, and (b) models converge better with informative priors, but those priors are not strong enough to overcome a true null effect in the data. For a detail of the empricial study and the context surrounding it, see the MB4 manuscript."
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r library imports, message=FALSE, warning=FALSE}
+library(brms)
+library(bridgesampling)
+library(tidyverse)
+library(scales)
+library(beepr)
+library(future)
+library(future.apply)
+plan(multiprocess, workers = 4) # Adapt to the number of cores you want to use
+source("StatTools.R")
+source("geom_flat_violin.R")
+
+theme_set(theme_bw())
+knitr::opts_chunk$set(cache = TRUE)
+```
+
+# Introduction
+
+First, we generate data, either with the expected effects (score above chance, no effect of age), or with a true null effect (no preference). The size of the dataset is taken from previous ManyBabies studies. Precisely, we set the number of participants tested in each lab from the mean and standard deviation observed in MB1, with a minimum of 16 participants as required by MB4, and downsize the number of labs from 67 to 20 to reduce computation times and draw conclusions that will still be robust with less participating labs than could be expected.
+
+For the "true effect"" data sets, we use the estimated true effect size from a recent meta-analysis (Margoni & Surian, 2018) for the mean probability of chosing the helper versus hinderer character, and the 95% Confidence Interval as an indication of variability for the standard deviation.
+For the "null effect" data sets, we use the same standard deviation but an equal probability of chosing either character.
+
+```{r data generation}
+# Define simulation-specific variables
+n_labs <- 20
+infants_by_lab <- rnorm(n_labs, 35, 20) %>% round() %>% pmax.int(16)
+n_infants <- sum(infants_by_lab)
+age_min <- 165
+age_max <- 320
+pr_helper <- 0.64     # From Margoni & Surian 2018 (estimated true effect size)
+pr_helper_sd <- 0.03  # From Margoni & Surian 2018 (confidence interval)
+
+# Generate repeat datasets
+n_sims <- 15
+data_sims <- future_replicate(n_sims,
+                              tibble(lab_id = mapply(rep,
+                                                     paste0("lab",1:n_labs),
+                                                     infants_by_lab) %>%
+                                       unlist() %>%
+                                       as_factor(),
+                                     age_days = sample(age_min:age_max,
+                                                       n_infants,
+                                                       replace = T),
+                                     z_age_days = scale(age_days),
+                                     chose_helper = rbinom(n_infants, 1,
+                                                           rnorm(n_infants,
+                                                                 mean = pr_helper,
+                                                                 sd = pr_helper_sd))),
+                              simplify = F)
+```
+
+We define informative priors based on Margoni and Surian (2018) for the Intercept, mildly informative priors on the main effect of age (expected null), and priors more restrictive than the defaults on the standard deviation of random effects to help the model converge. Crucially, sampling is of insufficient quality without those priors, which leads to errors when bridge-sampling the posterior to compute Bayes factors. We will see however that those priors do not lead to ``significant'' findings when there the data are constructed with a true null effect.
+
+```{r bayesian priors}
+priors.full <- c(set_prior("normal(.5753641, .1)", # From Margoni & Surian, through logit
+                           class = "Intercept"),
+                 set_prior("normal(0, .5)",
+                           class = "b"),
+                 set_prior("student_t(3, 0, 2)",
+                           class = "sd"))
+priors.nointercept <- c(set_prior("normal(0, .5)",
+                                  class = "b"),
+                        set_prior("student_t(3, 0, 2)",
+                                  class = "sd"))
+```
+
+# Age (in days): raw *versus* scaled and centred
+
+We first test the differences between running Bayesian general linear models on raw age in days (`age_days`) and scaled and centred age in days (`z_age_days`), precisely in terms of model convergence, precision of parameter estimations, and detection of an effect with a model comparison and a Bayes factor.
+
+## Using raw `age_days`
+
+### Models
+
+We fit a full model and a no-intercept model to the true effect data, use bridge sampling to estimate posterior distributions, and finally compare the two models to obtain a Bayes factor in favour of the full model over the no-intercept model.
+
+```{r raw age, message=FALSE, warning=FALSE}
+save_path <- "simulations_results/raw_age/"
+# Run bayesian models and bridge-sample
+# Running the nodels takes several hours
+run_models <- F
+if(run_models){
+  ## Full model
+  ### Run models
+  mods.raw_age.full <- lapply(data_sims,
+                              function(df){
+                                tryCatch(
+                                  {
+                                    brm(chose_helper ~ age_days +
+                                          (age_days | lab_id),
+                                        data = df,
+                                        family = bernoulli,
+                                        prior = priors.full,
+                                        iter = 10000,
+                                        future = T,
+                                        save_all_pars = T,
+                                        control = list(adapt_delta = .9999,
+                                                       max_treedepth = 20))
+                                  },
+                                  error = function(cond){return(NA)})
+                              })
+  ### Bridge-sample posteriors
+  bridges.raw_age.full <- lapply(mods.raw_age.full,
+                                 function(m){
+                                   tryCatch(bridge_sampler(m, silent = T),
+                                            error = function(cond){return(NA)})
+                                 })
+  ## No Intercept
+  ### Run models
+  mods.raw_age.nointercept <- lapply(data_sims,
+                                     function(df){
+                                       tryCatch(
+                                         {
+                                           brm(chose_helper ~ 0 + age_days +
+                                                 (0 + age_days | lab_id),
+                                               data = df,
+                                               family = bernoulli,
+                                               prior = priors.nointercept,
+                                               iter = 10000,
+                                               future = T,
+                                               save_all_pars = T,
+                                               control = list(adapt_delta = .9999,
+                                                              max_treedepth = 20))
+                                         },
+                                         error = function(cond){return(NA)})
+                                     })
+  ### Bridge-sample posteriors
+  bridges.raw_age.nointercept <-lapply(mods.raw_age.nointercept,
+                                       function(m){
+                                         tryCatch(bridge_sampler(m, silent = T),
+                                                  error = function(cond){return(NA)})
+                                       })
+  ## Save all
+  lapply(1:n_sims,
+         function(i){
+           saveRDS(mods.raw_age.full[[i]],
+                   paste0(save_path, "model_full_",i,".rds"))
+           saveRDS(mods.raw_age.nointercept[[i]],
+                   paste0(save_path, "model_nointercept_",i,".rds"))
+           saveRDS(bridges.raw_age.full[[i]],
+                   paste0(save_path, "bridge_full_",i,".rds"))
+           saveRDS(bridges.raw_age.nointercept[[i]],
+                   paste0(save_path, "bridge_nointercept_",i,".rds"))
+         })
+  beep(8)
+}else{
+  ## Read all
+  mods.raw_age.full <- lapply(1:n_sims, function(i){
+      readRDS(paste0(save_path, "model_full_",i,".rds"))
+    })
+  mods.raw_age.nointercept <- lapply(1:n_sims, function(i){
+      readRDS(paste0(save_path, "model_nointercept_",i,".rds"))
+    })
+  bridges.raw_age.full <- lapply(1:n_sims, function(i){
+      readRDS(paste0(save_path, "bridge_full_",i,".rds"))
+    })
+  bridges.raw_age.nointercept <- lapply(1:n_sims, function(i){
+      readRDS(paste0(save_path, "bridge_nointercept_",i,".rds"))
+    })
+}
+
+# Get Bayes factors
+bf.raw_age <- lapply(1:n_sims, function(i){
+  tryCatch(
+    {bayes_factor(bridges.raw_age.full[[i]],
+                  bridges.raw_age.nointercept[[i]])
+    },
+    error = function(cond){return(NA)})
+  })
+```
+
+### Plots
+
+We can look at the parameter estimates and their credible intervals for all the models, compared to the true simulated effects:
+
+```{r raw age estimates, message=FALSE, warning=FALSE}
+# Get estimates and HPDIs
+estimates.raw_age.full <- lapply(1:n_sims, function(i){
+    out <- mods.raw_age.full[[i]] %>%
+      estimates.brm_fixef(prob=.95, digits = 7) %>%
+      mutate(sim = i)
+  }) %>%
+  bind_rows()
+# True simulated effects
+true_effects <- tibble(Parameter = c("Intercept", "age_days"),
+                       Value = c(.5753641, 0))
+# Plot
+ggplot(estimates.raw_age.full,
+       aes(x = sim, y = Estimate,
+           ymin = lower, ymax = upper,
+           colour = Parameter)) +
+  xlab("Simulation") + ylab("Parameter Estimate") + coord_flip() +
+  scale_colour_brewer(palette = "Dark2", guide = FALSE) +
+  facet_grid(cols = vars(Parameter), scales = "free_x") +
+  geom_hline(data = true_effects, aes(yintercept = Value), linetype = "dashed") +
+  geom_pointrange()
+```
+
+We see that the estimate for age_days is pretty good, but the estimate for the intercept is much noisier. Notably, the estimate for `age_days` and it's HPDI are very close to zero as this parameter relates to raw age in days, which has values ranging from 165 to 320.
+
+## Using scaled and centred `z_age_days`
+
+### Models
+
+We fit a full model and a no-intercept model to the true effect data, use bridge sampling to estimate posterior distributions, and finally compare the two models to obtain a Bayes factor in favour of the full model over the no-intercept model.
+
+```{r scaled centred age, message=FALSE, warning=FALSE}
+save_path <- "simulations_results/scaled_age/"
+# Run bayesian models and bridge-sample
+# Running the nodels takes several hours
+run_models <- F
+if(run_models){
+  ## Full model
+  ### Run models
+  mods.scaled_age.full <- lapply(data_sims,
+                                 function(df){
+                                   tryCatch(
+                                     {
+                                       brm(chose_helper ~ z_age_days +
+                                             (z_age_days | lab_id),
+                                           data = df,
+                                           family = bernoulli,
+                                           prior = priors.full,
+                                           iter = 10000,
+                                           save_all_pars = T,
+                                           control = list(adapt_delta = .9999,
+                                                          max_treedepth = 20))
+                                     },
+                                     error = function(cond){return(NA)})
+                                 })
+  ### Bridge-sample posteriors
+  bridges.scaled_age.full <- lapply(mods.scaled_age.full,
+                                    function(m){
+                                      tryCatch(bridge_sampler(m, silent = T),
+                                               error = function(cond){return(NA)})
+                                    })
+  ## No Intercept
+  ### Run models
+  mods.scaled_age.nointercept <- lapply(data_sims,
+                                        function(df){
+                                          tryCatch(
+                                            {
+                                              brm(chose_helper ~ 0 + z_age_days +
+                                                    (0 + z_age_days | lab_id),
+                                                  data = df,
+                                                  family = bernoulli,
+                                                  prior = priors.nointercept,
+                                                  iter = 10000,
+                                                  save_all_pars = T,
+                                                  control = list(adapt_delta = .9999,
+                                                                 max_treedepth = 20))
+                                            },
+                                            error = function(cond){return(NA)})
+                                        })
+  ### Bridge-sample posteriors
+  bridges.scaled_age.nointercept <- lapply(mods.scaled_age.nointercept,
+                                          function(m){
+                                            tryCatch(bridge_sampler(m, silent = T),
+                                                     error = function(cond){return(NA)})
+                                          })
+  ## Save all
+  lapply(1:n_sims,
+         function(i){
+           saveRDS(mods.scaled_age.full[[i]],
+                   paste0(save_path, "model_full_",i,".rds"))
+           saveRDS(mods.scaled_age.nointercept[[i]],
+                   paste0(save_path, "model_nointercept_",i,".rds"))
+           saveRDS(bridges.scaled_age.full[[i]],
+                   paste0(save_path, "bridge_full_",i,".rds"))
+           saveRDS(bridges.scaled_age.nointercept[[i]],
+                   paste0(save_path, "bridge_nointercept_",i,".rds"))
+         })
+  beep(8)
+}else{
+  ## Read all
+  mods.scaled_age.full <- lapply(1:n_sims, function(i){
+      readRDS(paste0(save_path, "model_full_",i,".rds"))
+    })
+  mods.scaled_age.nointercept <- lapply(1:n_sims, function(i){
+      readRDS(paste0(save_path, "model_nointercept_",i,".rds"))
+    })
+  bridges.scaled_age.full <- lapply(1:n_sims, function(i){
+      readRDS(paste0(save_path, "bridge_full_",i,".rds"))
+    })
+  bridges.scaled_age.nointercept <- lapply(1:n_sims, function(i){
+      readRDS(paste0(save_path, "bridge_nointercept_",i,".rds"))
+    })
+}
+
+# Get Bayes factors
+bf.scaled_age <- lapply(1:n_sims,
+                        function(i){
+                          tryCatch(
+                            {
+                              bayes_factor(bridges.scaled_age.full[[i]],
+                                           bridges.scaled_age.nointercept[[i]])
+                            },
+                            error = function(cond){return(NA)})
+                        })
+```
+
+### Plots
+
+We can look at the parameter estimates and their credible intervals for all the models, compared to the true simulated effects:
+
+```{r scaled age estimates, message=FALSE, warning=FALSE}
+# Get estimates and HPDIs
+estimates.scaled_age.full <- lapply(1:n_sims, function(i){
+    out <- mods.scaled_age.full[[i]] %>%
+      estimates.brm_fixef(prob=.95, digits = 7) %>%
+      mutate(sim = i)
+  }) %>%
+  bind_rows()
+# True simulated effects
+true_effects <- tibble(Parameter = c("Intercept", "z_age_days"),
+                       Value = c(.5753641, 0))
+# Plot
+ggplot(estimates.scaled_age.full,
+       aes(x = sim, y = Estimate,
+           ymin = lower, ymax = upper,
+           colour = Parameter)) +
+  xlab("Simulation") + ylab("Parameter Estimate") + coord_flip() +
+  scale_colour_brewer(palette = "Dark2", guide = FALSE) +
+  facet_grid(cols = vars(Parameter), scales = "free_x") +
+  geom_hline(data = true_effects, aes(yintercept = Value), linetype = "dashed") +
+  geom_pointrange()
+```
+
+This time we see that parameter estimates for the intercept are much closer to the true effect and much more precise. Notably, this time the estimate for `z_age_days` is still centred on zero but much noisier, as this parameter now relates to one standard deviation in the sample for age in days, on average 40 days.
+
+## Comparing `age_days` and `z_age_days`
+
+As we have seen, the parameter estimates were evidently closer to the true effects when using scaled and centred age compared to using raw age. A crucial measure however is the models' ability to detect the true effect, as measured in our scripts by a model comparison Bayes factor (*b*-values). We can plot those *b*-values for models using `age_days` and `z_age_days`, with dashed line representing the typically used values for evidence for the null (*b*=1/3) and for the alternative hypothesis (*b*=3):
+
+```{r raw scaled bayes factors, message=FALSE, warning=FALSE}
+# Get Bayes factors into a proper tibble
+bf.all <- tibble(age = rep(c("raw age", "scaled centred age"), n_sims),
+                 bf = lapply(1:n_sims,
+                             function(i){
+                               c(bf.raw_age[[i]]$bf,
+                                 bf.scaled_age[[i]]$bf)
+                               }) %>% unlist(),
+                 log_bf = log1p(bf))
+# Raincloud plot
+ggplot(bf.all, aes(x = age, y = log_bf,
+                   colour = age, fill = age)) +
+  theme_bw() + ylab("Log Bayes factor [log(b+1)]") +
+  coord_flip() + facet_grid(cols = vars(age), scales = "free_x") +
+  theme(legend.position = "top",
+        axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.text.y = element_blank()) +
+  geom_hline(yintercept = c(log1p(1/3), log1p(3)), linetype = "dashed") +
+  geom_flat_violin(position = position_nudge(x = .2),
+                   colour = "black", alpha = .5, width = .7) +
+  geom_point(position = position_jitter(width = .15),
+             size = 1, alpha = .6, show.legend = FALSE) +
+  geom_boxplot(width = .1, alpha = .3, outlier.shape = NA,
+               colour = "black", show.legend = FALSE) +
+  scale_color_brewer(palette = "Dark2", name = NULL) +
+  scale_fill_brewer(palette = "Dark2", name = NULL)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+evidence <- bf.all %>%
+  group_by(age) %>%
+  summarise(n_H1 = sum(bf >= 3),
+            n_H0 = sum(bf <= 1/3))
+n_H1.raw_age <- evidence %>% subset(age == "raw age", n_H1) %>% as.numeric()
+n_H0.raw_age <- evidence %>% subset(age == "raw age", n_H0) %>% as.numeric()
+```
+
+Clearly, we see that models using raw `age_days` do not detect the true simulated effect, with only `r n_H1.raw_age` models resulting in a $b\leq3$, and sometimes even give evidence for the null with a Bayes factor $b\geq {}^1\!/_3$ (*n*=`r n_H0.raw_age`). On the other hand, models using scaled and centred `z_age_days` reliably provided robust evidence for the true simulated effect.
