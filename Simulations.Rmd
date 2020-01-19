@@ -28,7 +28,7 @@ knitr::opts_chunk$set(cache = TRUE)
 
 First, we generate data, either with the expected effects (score above chance, no effect of age), or with a true null effect (no preference). The size of the dataset is taken from previous ManyBabies studies. Precisely, we set the number of participants tested in each lab from the mean and standard deviation observed in MB1, with a minimum of 16 participants as required by MB4, and downsize the number of labs from 67 to 20 to reduce computation times and draw conclusions that will still be robust with less participating labs than could be expected.
 
-For the "true effect"" data sets, we use the estimated true effect size from a recent meta-analysis (Margoni & Surian, 2018) for the mean probability of chosing the helper versus hinderer character, and the 95% Confidence Interval as an indication of variability for the standard deviation.
+For the "true effect"" data sets, we use the estimated true effect size from a recent meta-analysis (Margoni & Surian, 2018) for the mean probability of chosing the helper versus hinderer character, and the 95% Confidence Interval and average sample size in studies included in Margoni and Surian (2018) to compute the standard deviation.
 For the "null effect" data sets, we use the same standard deviation but an equal probability of chosing either character.
 
 ```{r data generation}
@@ -39,7 +39,7 @@ n_infants <- sum(infants_by_lab)
 age_min <- 165
 age_max <- 320
 pr_helper <- 0.64     # From Margoni & Surian 2018 (estimated true effect size)
-pr_helper_sd <- 0.03  # From Margoni & Surian 2018 (confidence interval)
+pr_helper_sd <- 0.1   # From Margoni & Surian 2018 (CI*sqrt(mean(N))/Z(95))
 
 # Generate repeat datasets
 n_sims <- 30
