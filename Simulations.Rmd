@@ -190,7 +190,7 @@ if(run_models){
   beep(8)
 }
 ## Read Bayes factors
-bf.raw_age <- readRDS(paste0(save_path, "bayes_factors.rds"))
+bf.raw_age <- readRDS(paste0(save_path, "bayes_factors.csv"))
 ```
 
 ### Plots
@@ -495,7 +495,7 @@ if(run_models){
   beep(8)
 }
 ## Read Bayes factors
-bf.true_null <- readRDS(paste0(save_path, "bayes_factors.rds"))
+bf.true_null <- readRDS(paste0(save_path, "bayes_factors.csv"))
 ```
 
 ## Plots
