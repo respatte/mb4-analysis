@@ -42,7 +42,7 @@ pr_helper <- 0.64     # From Margoni & Surian 2018 (estimated true effect size)
 pr_helper_sd <- 0.1   # From Margoni & Surian 2018 (CI*sqrt(mean(N))/Z(95))
 
 # Generate repeat datasets
-n_sims <- 30
+n_sims <- 30 # The code shown in the rest of this document is restricted to one simulation
 data_sims <- n_sims %>%
   future_replicate(tibble(lab_id = mapply(rep,
                                           paste0("lab",1:n_labs),
@@ -73,7 +73,7 @@ null_sims <- n_sims %>%
                    simplify = F)
 ```
 
-We define informative priors based on Margoni and Surian (2018) for the Intercept, mildly informative priors on the main effect of age (expected null), and priors more restrictive than the defaults on the standard deviation of random effects to help the model converge. Crucially, sampling is of insufficient quality without those priors, which leads to errors when bridge-sampling the posterior to compute Bayes factors. We will see however that those priors do not lead to ``significant'' findings when there the data are constructed with a true null effect.
+We define informative priors based on Margoni and Surian (2018) for the Intercept, mildly informative priors on the main effect of age (expected null), and priors more restrictive than the defaults on the standard deviation of random effects to help the model converge. Crucially, sampling is of insufficient quality without those priors, which leads to errors when bridge-sampling the posterior to compute Bayes factors. We will see however that those priors do not lead to ''significant'' findings when there the data are constructed with a true null effect.
 
 ```{r bayesian priors}
 priors.full <- c(set_prior("normal(.5753641, .1)", # From Margoni & Surian, through logit
@@ -102,16 +102,52 @@ We first test the differences between running Bayesian general linear models on 
 
 We fit a full model and a no-intercept model to the true effect data, use bridge sampling to estimate posterior distributions, and finally compare the two models to obtain a Bayes factor in favour of the full model over the no-intercept model. First, we get the full model and bridge sample it's posterior:
 
-```{r raw age, echo=c(6:28), message=FALSE, warning=FALSE}
-save_path <- "simulations_results/raw_age/"
-# Run bayesian models and bridge-sample
-# Running the nodels takes several hours
+```{r eval=FALSE}
+model.raw_age.full <- brm(chose_helper ~ age_days + (age_days | lab_id),
+                          data = data_sim, family = bernoulli,
+                          prior = priors.full, iter = 10000,
+                          future = T, save_all_pars = T,
+                          control = list(adapt_delta = .9999,
+                                         max_treedepth = 20))
+bridge.raw_age.full <- bridge_sampler(model.raw_age.full, silent = T)
+```
+
+We then run the same code for the no-intercept model, that is, using the following formula:
+
+```{r eval=FALSE}
+chose_helper ~ 0 + age_days + (0 + age_days | lab_id)
+```
+
+Finally, we compute a Bayes factor from the sampled posteriors.
+
+```{r eval=FALSE}
+bf.raw_age <- bayes_factor(bridge.raw_age.full,
+                           bridge.raw_age.nointercept)
+```
+
+```{r raw age, echo=FALSE, message=FALSE, warning=FALSE}
+save_path <- "simulation_results/raw_age/"
+# Run bayesian models, bridge-sample, then
+# save parameter estimates and HPDIs to csv
+# Running the models takes several hours
 run_models <- T
 if(run_models){
-  ## Full model
-  bridges.raw_age.full <- lapply(1:n_sims, function(i){
+  ## Initialise estimates column names if file doesn't exist
+  if(!file.exists(paste0(save_path, "estimates_full.csv"))){
+    estimates <- tibble(`Parameter` = character(),
+                        `Estimate` = double(),
+                        `Est. Error` = double(),
+                        `lower` = double(),
+                        `upper` = double(),
+                        `95% CI` = character(),
+                        .rows = 0)
+    write_csv(estimates, paste0(save_path, "estimates_full.csv"))
+  }
+  out <- lapply(1:n_sims, function(i){
     tryCatch(
       {
+        ## Full model
+        print(paste("Starting raw models", i))
         ### Run model
         m <- brm(chose_helper ~ age_days +
                    (age_days | lab_id),
@@ -123,18 +159,12 @@ if(run_models){
                  save_all_pars = T,
                  control = list(adapt_delta = .9999,
                                 max_treedepth = 20))
-        ### Save model
-        saveRDS(m, paste0(save_path, "model_full_", i, ".rds"))
+        ### Get and save estimates and HPDIs
+        estimates <- estimates.brm_fixef(m, prob = .95, digits = 7)
+        write_csv(estimates, paste0(save_path, "estimates_full.csv"), append = T)
         ### Bridge-sample posterior
-        bridge <- bridge_sampler(m, silent = T)
-        return(bridge)
-      },
-      error = function(cond){return(NA)})
-  })
-  ## No Intercept
-  bridges.raw_age.nointercept <- lapply(1:n_sims, function(i){
-    tryCatch(
-      {
+        bridge.full <- bridge_sampler(m, silent = T)
+        ## No Intercept
         ### Run model
         m <- brm(chose_helper ~ 0 + age_days +
                    (0 + age_days | lab_id),
@@ -146,43 +176,21 @@ if(run_models){
                  save_all_pars = T,
                  control = list(adapt_delta = .9999,
                                 max_treedepth = 20))
-        ### Save model
-        saveRDS(m, paste0(save_path, "model_nointercept_", i, ".rds"))
         ### Bridge-sample posterior
-        bridge <- bridge_sampler(m, silent = T)
-        return(bridge)
-      },
-      error = function(cond){return(NA)})
+        bridge.nointercept <- bridge_sampler(m, silent = T)
+        ## Compute and save Bayes factor
+        bf <- bayes_factor(bridge.full,
+                           bridge.nointercept)$bf
+        write_csv(enframe(bf, name = NULL), # To write the single number as a tibble
+                  paste0(save_path, "bayes_factors.csv"), append = T)
+        return(0)
+        },
+      error = function(cond){return(1)})
   })
-  ## Save bridges
-  saveRDS(bridges.raw_age.full, paste0(save_path, "bridges_full.rds"))
-  saveRDS(bridges.raw_age.nointercept, paste0(save_path, "bridges_nointercept.rds"))
   beep(8)
-}else{
-  ## Read bridges
-  bridges.raw_age.full <- readRDS(paste0(save_path, "bridges_full.rds"))
-  bridges.raw_age.nointercept <- readRDS(paste0(save_path, "bridges_nointercept.rds"))
 }
-```
-
-We then run the same code for the no-intercept model, that is, using the following formula:
-
-```{r eval=FALSE}
-chose_helper ~ 0 + age_days + (0 + age_days | lab_id)
-```
-
-Finally, we compute a Bayes factor from the sampled posteriors.
-
-```{r message=FALSE, warning=FALSE}
-# Get Bayes factors
-bf.raw_age <- lapply(1:n_sims, function(i){
-  tryCatch(
-    {bayes_factor(bridges.raw_age.full[[i]],
-                  bridges.raw_age.nointercept[[i]])$bf
-    },
-    error = function(cond){return(NA)})
-}) %>%
-  unlist()
+## Read Bayes factors
+bf.raw_age <- readRDS(paste0(save_path, "bayes_factors.rds"))
 ```
 
 ### Plots
@@ -190,13 +198,8 @@ bf.raw_age <- lapply(1:n_sims, function(i){
 We can look at the parameter estimates and their credible intervals for all the models, compared to the true simulated effects:
 
 ```{r raw age estimates, message=FALSE, warning=FALSE}
-# Get estimates and HPDIs
-estimates.raw_age.full <- lapply(1:n_sims, function(i){
-    out <- readRDS(paste0(save_path, "model_full_", i, ".rds")) %>%
-      estimates.brm_fixef(prob=.95, digits = 7) %>%
-      mutate(sim = i)
-  }) %>%
-  bind_rows()
+# Read estimates and HPDIs
+estimates.raw_age.full <- read_csv(paste0(save_path, "estimates_full.csv"))
 # True simulated effects
 true_effects <- tibble(Parameter = c("Intercept", "age_days"),
                        Value = c(.5753641, 0))
@@ -221,15 +224,28 @@ We see that the estimate for age_days is pretty good, but the estimate for the i
 We fit a full model and a no-intercept model to the true effect data, use bridge sampling to estimate posterior distributions, and finally compare the two models to obtain a Bayes factor in favour of the full model over the no-intercept model. The code used is the same, with the difference that `age_days` is replaced by `z_age_days`.
 
 ```{r scaled centred age, echo=FALSE, message=FALSE, warning=FALSE}
-save_path <- "simulations_results/scaled_age/"
-# Run bayesian models and bridge-sample
-# Running the nodels takes several hours
+save_path <- "simulation_results/scaled_age/"
+# Run bayesian models, bridge-sample, then
+# save parameter estimates and HPDIs to csv
+# Running the models takes several hours
 run_models <- T
 if(run_models){
-  ## Full model
-  bridges.scaled_age.full <- lapply(1:n_sims, function(i){
+  ## Initialise estimates column names if file doesn't exist
+  if(!file.exists(paste0(save_path, "estimates_full.csv"))){
+    estimates <- tibble(`Parameter` = character(),
+                        `Estimate` = double(),
+                        `Est. Error` = double(),
+                        `lower` = double(),
+                        `upper` = double(),
+                        `95% CI` = character(),
+                        .rows = 0)
+    write_csv(estimates, paste0(save_path, "estimates_full.csv"))
+  }
+  out <- lapply(1:n_sims, function(i){
     tryCatch(
       {
+        ## Full model
+        print(paste("Starting scaled models", i))
         ### Run model
         m <- brm(chose_helper ~ z_age_days +
                    (z_age_days | lab_id),
@@ -241,18 +257,12 @@ if(run_models){
                  save_all_pars = T,
                  control = list(adapt_delta = .9999,
                                 max_treedepth = 20))
-        ### Save model
-        saveRDS(m, paste0(save_path, "model_full_", i, ".rds"))
+        ### Get and save estimates and HPDIs
+        estimates <- estimates.brm_fixef(m, prob = .95, digits = 7)
+        write_csv(estimates, paste0(save_path, "estimates_full.csv"), append = T)
         ### Bridge-sample posterior
-        bridge <- bridge_sampler(m, silent = T)
-        return(bridge)
-      },
-      error = function(cond){return(NA)})
-  })
-  ## No Intercept
-  bridges.scaled_age.nointercept <- lapply(1:n_sims, function(i){
-    tryCatch(
-      {
+        bridge.full <- bridge_sampler(m, silent = T)
+        ## No Intercept
         ### Run model
         m <- brm(chose_helper ~ 0 + z_age_days +
                    (0 + z_age_days | lab_id),
@@ -264,34 +274,40 @@ if(run_models){
                  save_all_pars = T,
                  control = list(adapt_delta = .9999,
                                 max_treedepth = 20))
-        ### Save model
-        saveRDS(m, paste0(save_path, "model_nointercept_", i, ".rds"))
         ### Bridge-sample posterior
-        bridge <- bridge_sampler(m, silent = T)
-        return(bridge)
-      },
-      error = function(cond){return(NA)})
+        bridge.nointercept <- bridge_sampler(m, silent = T)
+        ## Compute and save Bayes factor for Intercept
+        bf <- bayes_factor(bridge.full,
+                           bridge.nointercept)$bf
+        write_csv(enframe(bf, name = NULL), # To write the single number as a tibble
+                  paste0(save_path, "bayes_factors_intercept.csv"), append = T)
+        ## No Age (necessary here while we have access to full model bridge)
+        ### Run model
+        m <- brm(chose_helper ~ 1 + (1 | lab_id),
+                 data = data_sims[[i]],
+                 family = bernoulli,
+                 prior = priors.noage,
+                 iter = 10000,
+                 future = T,
+                 save_all_pars = T,
+                 control = list(adapt_delta = .9999,
+                                max_treedepth = 20))
+        ### Bridge-sample posterior
+        bridge.noage <- bridge_sampler(m, silent = T)
+        ## Compute and save Bayes factor for Age
+        bf <- bayes_factor(bridge.full,
+                           bridge.noage)$bf
+        write_csv(enframe(bf, name = NULL), # To write the single number as a tibble
+                  paste0(save_path, "bayes_factors_age.csv"), append = T)
+        return(0)
+        },
+      error = function(cond){return(1)})
   })
-  ## Save bridges
-  saveRDS(bridges.scaled_age.full, paste0(save_path, "bridges_full.rds"))
-  saveRDS(bridges.scaled_age.nointercept, paste0(save_path, "bridges_nointercept.rds"))
   beep(8)
-}else{
-  ## Read bridges
-  bridges.scaled_age.full <- readRDS(paste0(save_path, "bridges_full.rds"))
-  bridges.scaled_age.nointercept <- readRDS(paste0(save_path, "bridges_nointercept.rds"))
 }
-
-# Get Bayes factors
-bf.scaled_age <- lapply(1:n_sims, function(i){
-  tryCatch(
-    {
-      bayes_factor(bridges.scaled_age.full[[i]],
-                   bridges.scaled_age.nointercept[[i]])$bf
-    },
-    error = function(cond){return(NA)})
-}) %>%
-  unlist()
+## Read Bayes factors
+bf.scaled_age <- read_csv(paste0(save_path, "bayes_factors_intercept.csv"))
+bf.noage <- read_csv(paste0(save_path, "bayes_factors_age.csv"))
 ```
 
 ### Plots
@@ -299,13 +315,8 @@ bf.scaled_age <- lapply(1:n_sims, function(i){
 We can look at the parameter estimates and their credible intervals for all the models, compared to the true simulated effects:
 
 ```{r scaled age estimates, echo=FALSE, message=FALSE, warning=FALSE}
-# Get estimates and HPDIs
-estimates.scaled_age.full <- lapply(1:n_sims, function(i){
-    out <- readRDS(paste0(save_path, "model_full_", i, ".rds")) %>%
-      estimates.brm_fixef(prob=.95, digits = 7) %>%
-      mutate(sim = i)
-  }) %>%
-  bind_rows()
+# Read estimates and HPDIs
+estimates.scaled_age.full <- read_csv(paste0("estimates_full.csv"))
 # True simulated effects
 true_effects <- tibble(Parameter = c("Intercept", "z_age_days"),
                        Value = c(.5753641, 0))
@@ -373,54 +384,6 @@ Another important question in the MB4 study is whether or not there is an effect
 
 We first run a model that includes only the intercept but no effect of age (`chose_helper ~ 1 + (1 | lab_id)`), and compare this model with the full model to obtain a Bayes factor as before.
 
-```{r no age, echo=FALSE, message=FALSE, warning=FALSE}
-save_path <- "simulations_results/scaled_age/"
-# Run bayesian models and bridge-sample
-# Running the nodels takes several hours
-run_models <- T
-if(run_models){
-  ## Full model
-  bridges.scaled_age.noage <- lapply(1:n_sims, function(i){
-    tryCatch(
-      {
-        ### Run model
-        m <- brm(chose_helper ~ 1 + (1 | lab_id),
-                 data = data_sims[[i]],
-                 family = bernoulli,
-                 prior = priors.noage,
-                 iter = 10000,
-                 future = T,
-                 save_all_pars = T,
-                 control = list(adapt_delta = .9999,
-                                max_treedepth = 20))
-        ### Save model
-        saveRDS(m, paste0(save_path, "model_noage_", i, ".rds"))
-        ### Bridge-sample posterior
-        bridge <- bridge_sampler(m, silent = T)
-        return(bridge)
-      },
-      error = function(cond){return(NA)})
-  })
-  ## Save bridges
-  saveRDS(bridges.raw_age.noage, paste0(save_path, "bridges_noage.rds"))
-  beep(8)
-}else{
-  ## Read bridges
-  bridges.raw_age.noage <- readRDS(paste0(save_path, "bridges_noage.rds"))
-}
-
-# Get Bayes factors
-bf.noage <- lapply(1:n_sims, function(i){
-  tryCatch(
-    {
-      bayes_factor(bridges.scaled_age.full[[i]],
-                   bridges.scaled_age.noage[[i]])$bf
-    },
-    error = function(cond){return(NA)})
-}) %>%
-  unlist()
-```
-
 ## Plots
 
 We can then plot those *b*-values, with dashed lines representing the typical decision values for evidence for the null ($b\leq {}^1\!/_3$) and against the null ($b\geq3$):
@@ -468,19 +431,32 @@ We used informative priors in the previous simulations, to help models converge,
 We first run the same statistical models, using scaled and centred `z_age_days`, on data with a true null effect, that is, no preference to either helper or hinderer character, and compare a full model to a "no intercept" model to obtain *b*-values.
 
 ```{r true null, echo=FALSE, message=FALSE, warning=FALSE}
-save_path <- "simulations_results/true_null/"
-# Run bayesian models and bridge-sample
-# Running the nodels takes several hours
+save_path <- "simulation_results/true_null/"
+# Run bayesian models, bridge-sample, then
+# save parameter estimates and HPDIs to csv
+# Running the models takes several hours
 run_models <- T
 if(run_models){
-  ## Full model
-  bridges.true_null.full <- lapply(1:n_sims, function(i){
+  ## Initialise estimates column names if file doesn't exist
+  if(!file.exists(paste0(save_path, "estimates_full.csv"))){
+    estimates <- tibble(`Parameter` = character(),
+                        `Estimate` = double(),
+                        `Est. Error` = double(),
+                        `lower` = double(),
+                        `upper` = double(),
+                        `95% CI` = character(),
+                        .rows = 0)
+    write_csv(estimates, paste0(save_path, "estimates_full.csv"))
+  }
+  out <- lapply(1:n_sims, function(i){
     tryCatch(
       {
+        ## Full model
+        print(paste("Starting true null models", i))
         ### Run model
         m <- brm(chose_helper ~ z_age_days +
                    (z_age_days | lab_id),
-                 data = data_sims[[i]],
+                 data = null_sims[[i]],
                  family = bernoulli,
                  prior = priors.full,
                  iter = 10000,
@@ -488,22 +464,16 @@ if(run_models){
                  save_all_pars = T,
                  control = list(adapt_delta = .9999,
                                 max_treedepth = 20))
-        ### Save model
-        saveRDS(m, paste0(save_path, "model_full_", i, ".rds"))
+        ### Get and save estimates and HPDIs
+        estimates <- estimates.brm_fixef(m, prob = .95, digits = 7)
+        write_csv(estimates, paste0(save_path, "estimates_full.csv"), append = T)
         ### Bridge-sample posterior
-        bridge <- bridge_sampler(m, silent = T)
-        return(bridge)
-      },
-      error = function(cond){return(NA)})
-  })
-  ## No Intercept
-  bridges.true_null.nointercept <- lapply(1:n_sims, function(i){
-    tryCatch(
-      {
+        bridge.full <- bridge_sampler(m, silent = T)
+        ## No Intercept
         ### Run model
         m <- brm(chose_helper ~ 0 + z_age_days +
                    (0 + z_age_days | lab_id),
-                 data = data_sims[[i]],
+                 data = null_sims[[i]],
                  family = bernoulli,
                  prior = priors.nointercept,
                  iter = 10000,
@@ -511,34 +481,21 @@ if(run_models){
                  save_all_pars = T,
                  control = list(adapt_delta = .9999,
                                 max_treedepth = 20))
-        ### Save model
-        saveRDS(m, paste0(save_path, "model_nointercept_", i, ".rds"))
         ### Bridge-sample posterior
-        bridge <- bridge_sampler(m, silent = T)
-        return(bridge)
-      },
-      error = function(cond){return(NA)})
+        bridge.nointercept <- bridge_sampler(m, silent = T)
+        ## Compute and save Bayes factor
+        bf <- bayes_factor(bridge.full,
+                           bridge.nointercept)$bf
+        write_csv(enframe(bf, name = NULL), # To write the single number as a tibble
+                  paste0(save_path, "bayes_factors.csv"), append = T)
+        return(0)
+        },
+      error = function(cond){return(1)})
   })
-  ## Save bridges
-  saveRDS(bridges.true_null.full, paste0(save_path, "bridges_full.rds"))
-  saveRDS(bridges.true_null.nointercept, paste0(save_path, "bridges_nointercept.rds"))
   beep(8)
-}else{
-  ## Read bridges
-  bridges.true_null.full <- readRDS(paste0(save_path, "bridges_full.rds"))
-  bridges.true_null.nointercept <- readRDS(paste0(save_path, "bridges_nointercept.rds"))
 }
-
-# Get Bayes factors
-bf.true_null <- lapply(1:n_sims, function(i){
-  tryCatch(
-    {
-      bayes_factor(bridges.true_null.full[[i]],
-                   bridges.true_null.nointercept[[i]])$bf
-    },
-    error = function(cond){return(NA)})
-}) %>%
-  unlist()
+## Read Bayes factors
+bf.true_null <- readRDS(paste0(save_path, "bayes_factors.rds"))
 ```
 
 ## Plots
@@ -548,11 +505,7 @@ As a first sanity check, we can plot the parameter estimates for the full model,
 ```{r true null estimates, echo=FALSE, message=FALSE, warning=FALSE}
 # Get estimates and HPDIs
 estimates.scaled_age.full <- lapply(1:n_sims, function(i){
-    out <- readRDS(paste0(save_path, "model_full_", i, ".rds")) %>%
-      estimates.brm_fixef(prob=.95, digits = 7) %>%
-      mutate(sim = i)
-  }) %>%
-  bind_rows()
+    out <- readRDS(paste0(save_path, "model_full_", i, ".rds")) 
 # True simulated effects
 true_effects <- tibble(Parameter = c("Intercept", "z_age_days"),
                        Value = c(0, 0))
