@@ -31,7 +31,7 @@ First, we generate data, either with the expected effects (score above chance, n
 For the "true effect"" data sets, we use the estimated true effect size from a recent meta-analysis (Margoni & Surian, 2018) for the mean probability of chosing the helper versus hinderer character, and the 95% Confidence Interval and average sample size in studies included in Margoni and Surian (2018) to compute the standard deviation.
 For the "null effect" data sets, we use the same standard deviation but an equal probability of chosing either character.
 
-```{r data generation}
+```{r data generation, message=FALSE, warning=FALSE}
 # Define simulation-specific variables
 n_labs <- 20
 infants_by_lab <- rnorm(n_labs, 35, 20) %>% round() %>% pmax.int(16)
@@ -130,7 +130,7 @@ save_path <- "simulation_results/raw_age/"
 # Run bayesian models, bridge-sample, then
 # save parameter estimates and HPDIs to csv
 # Running the models takes several hours
-run_models <- T
+run_models <- F
 if(run_models){
   ## Initialise estimates column names if file doesn't exist
   if(!file.exists(paste0(save_path, "estimates_full.csv"))){
@@ -190,7 +190,8 @@ if(run_models){
   beep(8)
 }
 ## Read Bayes factors
-bf.raw_age <- readRDS(paste0(save_path, "bayes_factors.csv"))
+bf.raw_age <- read_csv(paste0(save_path, "bayes_factors.csv"),
+                       col_names = "bf")
 ```
 
 ### Plots
@@ -199,16 +200,20 @@ We can look at the parameter estimates and their credible intervals for all the 
 
 ```{r raw age estimates, message=FALSE, warning=FALSE}
 # Read estimates and HPDIs
-estimates.raw_age.full <- read_csv(paste0(save_path, "estimates_full.csv"))
+estimates.raw_age.full <- read_csv(paste0(save_path, "estimates_full.csv")) %>%
+  rownames_to_column() %>%
+  as_tibble()
 # True simulated effects
 true_effects <- tibble(Parameter = c("Intercept", "age_days"),
                        Value = c(.5753641, 0))
 # Plot
 ggplot(estimates.raw_age.full,
-       aes(x = sim, y = Estimate,
+       aes(x = rowname, y = Estimate,
            ymin = lower, ymax = upper,
            colour = Parameter)) +
   xlab("Simulation") + ylab("Parameter Estimate") + coord_flip() +
+  theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank()) +
   scale_colour_brewer(palette = "Dark2", guide = FALSE) +
   facet_grid(cols = vars(Parameter), scales = "free_x") +
   geom_hline(data = true_effects, aes(yintercept = Value), linetype = "dashed") +
@@ -228,7 +233,7 @@ save_path <- "simulation_results/scaled_age/"
 # Run bayesian models, bridge-sample, then
 # save parameter estimates and HPDIs to csv
 # Running the models takes several hours
-run_models <- T
+run_models <- F
 if(run_models){
   ## Initialise estimates column names if file doesn't exist
   if(!file.exists(paste0(save_path, "estimates_full.csv"))){
@@ -306,8 +311,10 @@ if(run_models){
   beep(8)
 }
 ## Read Bayes factors
-bf.scaled_age <- read_csv(paste0(save_path, "bayes_factors_intercept.csv"))
-bf.noage <- read_csv(paste0(save_path, "bayes_factors_age.csv"))
+bf.scaled_age <- read_csv(paste0(save_path, "bayes_factors_intercept.csv"),
+                          col_names = "bf")
+bf.noage <- read_csv(paste0(save_path, "bayes_factors_age.csv"),
+                     col_names = "bf")
 ```
 
 ### Plots
@@ -316,16 +323,20 @@ We can look at the parameter estimates and their credible intervals for all the 
 
 ```{r scaled age estimates, echo=FALSE, message=FALSE, warning=FALSE}
 # Read estimates and HPDIs
-estimates.scaled_age.full <- read_csv(paste0("estimates_full.csv"))
+estimates.scaled_age.full <- read_csv(paste0(save_path,"estimates_full.csv")) %>%
+  rownames_to_column() %>%
+  as_tibble()
 # True simulated effects
 true_effects <- tibble(Parameter = c("Intercept", "z_age_days"),
                        Value = c(.5753641, 0))
 # Plot
 ggplot(estimates.scaled_age.full,
-       aes(x = sim, y = Estimate,
+       aes(x = rowname, y = Estimate,
            ymin = lower, ymax = upper,
            colour = Parameter)) +
   xlab("Simulation") + ylab("Parameter Estimate") + coord_flip() +
+  theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank()) +
   scale_colour_brewer(palette = "Dark2", guide = FALSE) +
   facet_grid(cols = vars(Parameter), scales = "free_x") +
   geom_hline(data = true_effects, aes(yintercept = Value), linetype = "dashed") +
@@ -340,9 +351,12 @@ As we have seen, the parameter estimates were evidently closer to the true effec
 
 ```{r raw scaled bayes factors, message=FALSE, warning=FALSE}
 # Get Bayes factors into a proper tibble
-bf.all <- tibble(age = rep(c("raw age", "scaled centred age"), n_sims),
-                 bf = c(bf.raw_age, bf.scaled_age),
-                 log_bf = log1p(bf))
+bf.raw_age.tmp <- bf.raw_age %>%
+  mutate(age = "raw age")
+bf.scaled_age.tmp <- bf.scaled_age %>%
+  mutate(age = "scaled centred age")
+bf.all <- bind_rows(bf.raw_age.tmp, bf.scaled_age.tmp) %>%
+  mutate(log_bf = log1p(bf))
 # Raincloud plot
 ggplot(bf.all, aes(x = age, y = log_bf,
                    colour = age, fill = age)) +
@@ -390,9 +404,9 @@ We can then plot those *b*-values, with dashed lines representing the typical de
 
 ```{r no age bayes factors, echo=FALSE, message=FALSE, warning=FALSE}
 # Get Bayes factors into a proper tibble
-bf.noage <- tibble(test = rep("no age", n_sims),
-                   bf = bf.noage,
-                   log_bf = log1p(bf))
+bf.noage <- bf.noage %>%
+  mutate(test = "no age",
+         log_bf = log1p(bf))
 # Raincloud plot
 ggplot(bf.noage, aes(x = test, y = log_bf,
                    colour = test, fill = test)) +
@@ -420,7 +434,7 @@ n_H1.noage <- evidence %>% select(n_H1) %>% as.numeric()
 n_H0.noage <- evidence %>% select(n_H0) %>% as.numeric()
 ```
 
-Here, we see that `blablabla`.
+Here, we see that the *b*-values consistently indicate that a true null effect is better supported by the data.
 
 # Impact of informative priors on true null data
 
@@ -435,7 +449,7 @@ save_path <- "simulation_results/true_null/"
 # Run bayesian models, bridge-sample, then
 # save parameter estimates and HPDIs to csv
 # Running the models takes several hours
-run_models <- T
+run_models <- F
 if(run_models){
   ## Initialise estimates column names if file doesn't exist
   if(!file.exists(paste0(save_path, "estimates_full.csv"))){
@@ -495,7 +509,8 @@ if(run_models){
   beep(8)
 }
 ## Read Bayes factors
-bf.true_null <- readRDS(paste0(save_path, "bayes_factors.csv"))
+bf.true_null <- read_csv(paste0(save_path, "bayes_factors.csv"),
+                         col_names = "bf")
 ```
 
 ## Plots
@@ -504,32 +519,35 @@ As a first sanity check, we can plot the parameter estimates for the full model,
 
 ```{r true null estimates, echo=FALSE, message=FALSE, warning=FALSE}
 # Get estimates and HPDIs
-estimates.scaled_age.full <- lapply(1:n_sims, function(i){
-    out <- readRDS(paste0(save_path, "model_full_", i, ".rds")) 
+estimates.true_null.full <- read_csv(paste0(save_path, "estimates_full.csv")) %>%
+  rownames_to_column() %>%
+  as_tibble()
 # True simulated effects
 true_effects <- tibble(Parameter = c("Intercept", "z_age_days"),
                        Value = c(0, 0))
 # Plot
-ggplot(estimates.scaled_age.full,
-       aes(x = sim, y = Estimate,
+ggplot(estimates.true_null.full,
+       aes(x = rowname, y = Estimate,
            ymin = lower, ymax = upper,
            colour = Parameter)) +
   xlab("Simulation") + ylab("Parameter Estimate") + coord_flip() +
+  theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank()) +
   scale_colour_brewer(palette = "Dark2", guide = FALSE) +
   facet_grid(cols = vars(Parameter), scales = "free_x") +
   geom_hline(data = true_effects, aes(yintercept = Value), linetype = "dashed") +
   geom_pointrange()
 ```
 
-First, we see that `blablabla`.
+First, we see that overall the informative priors have indeed shifted the estimated Intercept away from zero. More precisely however, the addition of true null data has shifted our initial beliefs (informative priors) closer to a zero intercept, and additional data would further change our knowledge through Bayesian update.
 
 We can then plot the *b*-values associated with those models:
 
 ```{r true null bayes factors, echo=FALSE, message=FALSE, warning=FALSE}
 # Get Bayes factors into a proper tibble
-bf.true_null <- tibble(test = rep("true null", n_sims),
-                   bf = bf.true_null,
-                   log_bf = log1p(bf))
+bf.true_null <- bf.true_null %>%
+  mutate(test = "true null",
+         log_bf = log1p(bf))
 # Raincloud plot
 ggplot(bf.true_null, aes(x = test, y = log_bf,
                    colour = test, fill = test)) +
@@ -557,4 +575,4 @@ n_H1.true_null <- evidence %>% select(n_H1) %>% as.numeric()
 n_H0.true_null <- evidence %>% select(n_H0) %>% as.numeric()
 ```
 
-We see that `blablabla`.
+We see that, despite the intercept estimate still being shifted away from zero, the Bayesian hypothesis testing consistently tells us that the null hypothesis is better supported by the data at hand. Given that we know the data to be constructed around a true null effect, this shows that the informative priors constructed from Margoni and Surian (2018) did not impact the conclusions we would draw from true null data.
