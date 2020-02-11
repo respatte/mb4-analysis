@@ -16,7 +16,8 @@ library(scales)
 library(beepr)
 library(future)
 library(future.apply)
-plan(multiprocess, workers = 4) # Adapt to the number of cores you want to use
+library(furrr)
+plan(multiprocess, workers = 8) # Adapt to the number of cores you want to use
 source("StatTools.R")
 source("geom_flat_violin.R")
 
@@ -576,3 +577,232 @@ n_H0.true_null <- evidence %>% select(n_H0) %>% as.numeric()
 ```
 
 We see that, despite the intercept estimate still being shifted away from zero, the Bayesian hypothesis testing consistently tells us that the null hypothesis is better supported by the data at hand. Given that we know the data to be constructed around a true null effect, this shows that the informative priors constructed from Margoni and Surian (2018) did not impact the conclusions we would draw from true null data.
+
+# Cost, in terms of statistical power, of adding a control condition
+
+One issue that was raised by the first round of reviews was the absence of a non-social control condition. There were theoretical reasons in favour and against the addition of this control condition, but a crucial factor to make a final decision was the impact this would have on statistical power, and therefore the impact on the number of participants required to evidence a true effect.
+
+To answer this question, we run by hand a Bayesian power analysis, following the structure described in [this blog post](https://solomonkurz.netlify.com/post/bayesian-power-analysis-part-i/). In short, we simulate data, run two models to be compared with a Bayes factor as previously, and count which percentage of models evidenced an effect as conveyed by a $b$-value greater than 3. To cut down on computation time (from a couple months to a day), we run 100 simulations for each tested number of participants $n$, and we conduct a dychotomic search between 100 and 500 participants to find the number of participants necessary to achieve roughly 80% power.
+
+## Simulations
+
+For the paradigm without a non-social control condition, the data and tests are the ones described previously, using `z_age_days` to test for a non-null intercept.
+
+For the paradigm with a non-social control condition, we expect participants in the control condition to have no preference and be as variable as participants in the social condition. We then test the following models against each other:
+
+```{r eval=FALSE}
+# Model for H1
+chose_helper ~ 1 + condition + age_days + (1 + condition + age_days | lab_id)
+# Model for H0
+chose_helper ~ 1 +             age_days + (1 +             age_days | lab_id)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+save_path <- "simulation_results/control/"
+# Running all the models takes days, and saves Bayes factors for later use
+run_models <- F
+if(run_models){
+  n_sims <- 100
+  # Control simulations
+  n_infants <- 10
+  diff_helper <- pr_helper - .5
+  ## Initial control dataset
+  df.ctrl <- tibble(lab_id = sample(1:n_labs, n_infants, replace = T) %>% as_factor(),
+                    age_days = sample(age_min:age_max, n_infants, replace = T),
+                    z_age_days = scale(age_days),
+                    condition = rep(c("non-social", "social"), each = n_infants/2),
+                    chose_helper = rbinom(n_infants, 1,
+                                          rnorm(n_infants,
+                                                mean = .5 + diff_helper*(condition=="social"),
+                                                sd = pr_helper_sd)))
+  ## Control priors
+  priors.ctrl.H1 <- c(set_prior("normal(0, .1)",
+                                class = "Intercept"),
+                      set_prior("normal(0, .5)",
+                                class = "b"),
+                      set_prior("normal(.5753641, .1)", # From Margoni & Surian, through logit
+                                class = "b", coef = "conditionsocial"),
+                      set_prior("student_t(3, 0, 2)",
+                                class = "sd"))
+  priors.ctrl.H0 <- c(set_prior("normal(0, .1)",
+                                class = "Intercept"),
+                      set_prior("normal(0, .5)",
+                                class = "b"),
+                      set_prior("student_t(3, 0, 2)",
+                                class = "sd"))
+  ## Control models
+  model.ctrl.H1 <- brm(chose_helper ~ 1 + condition + z_age_days +
+                         (1 + condition + z_age_days | lab_id),
+                       data = df.ctrl,
+                       family = bernoulli,
+                       prior = priors.ctrl.H1,
+                       iter = 10000,
+                       future = T,
+                       save_all_pars = T,
+                       control = list(adapt_delta = .9999,
+                                      max_treedepth = 20))
+  model.ctrl.H0 <- brm(chose_helper ~ 1 + z_age_days +
+                         (1 + z_age_days | lab_id),
+                       data = df.ctrl,
+                       family = bernoulli,
+                       prior = priors.ctrl.H0,
+                       iter = 10000,
+                       future = T,
+                       save_all_pars = T,
+                       control = list(adapt_delta = .9999,
+                                      max_treedepth = 20))
+  ## Define main simulation function
+  sim.ctrl <- function(seed, n_infants){
+    set.seed(seed)
+    ### Generate dataset
+    df <- tibble(lab_id = sample(1:n_labs, n_infants, replace = T) %>% as_factor(),
+                 age_days = sample(age_min:age_max, n_infants, replace = T),
+                 z_age_days = scale(age_days),
+                 condition = rep(c("non-social", "social"), each = n_infants/2),
+                 chose_helper = rbinom(n_infants, 1,
+                                       rnorm(n_infants,
+                                             mean = .5 + diff_helper*(condition=="social"),
+                                             sd = pr_helper_sd)))
+    ### Run models
+    m.H1 <- update(model.ctrl.H1, newdata = df, seed = seed)
+    m.H0 <- update(model.ctrl.H0, newdata = df, seed = seed)
+    ### Bridge sample
+    bridge.H1 <- bridge_sampler(m.H1, silent = T)
+    bridge.H0 <- bridge_sampler(m.H0, silent = T)
+    ### Bayes factor
+    bf <- bayes_factor(bridge.H1, bridge.H0)$bf
+    return(bf)
+  }
+  # No-control simulations
+  ## Initial no-control dataset
+  df.noctrl <- tibble(lab_id = sample(1:n_labs, n_infants, replace = T) %>% as_factor(),
+                      age_days = sample(age_min:age_max, n_infants, replace = T),
+                      z_age_days = scale(age_days),
+                      chose_helper = rbinom(n_infants, 1,
+                                            rnorm(n_infants,
+                                                  mean = pr_helper,
+                                                  sd = pr_helper_sd)))
+  ## Control priors
+  priors.noctrl.H1 <- c(set_prior("normal(.5753641, .1)", # From Margoni & Surian, through logit
+                                  class = "Intercept"),
+                        set_prior("normal(0, .5)",
+                                  class = "b"),
+                        set_prior("student_t(3, 0, 2)",
+                                  class = "sd"))
+  priors.noctrl.H0 <- c(set_prior("normal(0, .5)",
+                                  class = "b"),
+                        set_prior("student_t(3, 0, 2)",
+                                  class = "sd"))
+  ## Control models
+  model.noctrl.H1 <- brm(chose_helper ~ 1 + z_age_days +
+                           (1 + z_age_days | lab_id),
+                         data = df.noctrl,
+                         family = bernoulli,
+                         prior = priors.noctrl.H1,
+                         iter = 10000,
+                         future = T,
+                         save_all_pars = T,
+                         control = list(adapt_delta = .9999,
+                                        max_treedepth = 20))
+  model.noctrl.H0 <- brm(chose_helper ~ 0 + z_age_days +
+                           (0 + z_age_days | lab_id),
+                         data = df.noctrl,
+                         family = bernoulli,
+                         prior = priors.noctrl.H0,
+                         iter = 10000,
+                         future = T,
+                         save_all_pars = T,
+                         control = list(adapt_delta = .9999,
+                                        max_treedepth = 20))
+  ## Define main simulation function
+  sim.noctrl <- function(seed, n_infants){
+    set.seed(seed)
+    ### Generate dataset
+    df <- tibble(lab_id = sample(1:n_labs, n_infants, replace = T) %>% as_factor(),
+                 age_days = sample(age_min:age_max, n_infants, replace = T),
+                 z_age_days = scale(age_days),
+                 condition = rep(c("non-social", "social"), each = n_infants/2),
+                 chose_helper = rbinom(n_infants, 1,
+                                       rnorm(n_infants,
+                                             mean = .5 + diff_helper*(condition=="social"),
+                                             sd = pr_helper_sd)))
+    ### Run models
+    m.H1 <- update(model.noctrl.H1, newdata = df, seed = seed)
+    m.H0 <- update(model.noctrl.H0, newdata = df, seed = seed)
+    ### Bridge sample
+    bridge.H1 <- bridge_sampler(m.H1, silent = T)
+    bridge.H0 <- bridge_sampler(m.H0, silent = T)
+    ### Bayes factor
+    bf <- bayes_factor(bridge.H1, bridge.H0)$bf
+    return(bf)
+  }
+  # Run all simulations
+  ## Min and max for dichotomic search
+  n10_infants_min <- 10
+  n10_infants_max <- 50
+  ## Dichotomic search function
+  search.dichotomy <- function(sim.fun, sim.type, n_min, n_max, pwr_goal = .8){
+    n <- (n_min + n_max) %/% 2
+    repeat{
+      print(paste0("Dichotomic search: n=", n))
+      bfs <- future_map_dbl(1:n_sims, possibly(sim.fun, NA), n_infants = n*10,
+                            .progress = T)
+      bfs %>% enframe(name = NULL, value = "b.value") %>%
+        write_csv(paste0(save_path, "bf_", sim.type, "_", n, ".csv"))
+      pwr <- sum(bfs > 3, na.rm = T)/n_sims
+      if(pwr < pwr_goal){
+        n_min <- n
+      }else{
+        n_max <- n
+      }
+      if(n_max - n_min == 1){break}
+      n <- (n_min + n_max) %/% 2
+    }
+    return(n)
+  }
+  ## Start search for control and no-control
+  n_infants_crit.ctrl <-search.dichotomy(sim.ctrl, "ctrl",
+                                         n10_infants_min, n10_infants_max)
+  n_infants_crit.noctrl <- search.dichotomy(sim.noctrl, "no-ctrl",
+                                            n10_infants_min, n10_infants_max)
+  beep(8)
+}
+```
+
+## Plots
+
+We can then plot the computed power estimates (note that, because of the dychotomic search, we don't have power estimates at regular intervals):
+
+```{r message=FALSE, warning=FALSE}
+# Read Bayes factors for ctrl and noctrl, compute power
+pwr.design <- tibble(design = c("_ctrl_", "_no-ctrl_")) %>%
+  mutate(n10_infants = map(design, function(design){
+    list.files(save_path, pattern = paste0(design)) %>%
+      str_split("[_\\.]") %>%
+      map_chr(`[`, 3) %>%
+      as.numeric()
+  })) %>%
+  unnest(n10_infants) %>%
+  mutate(beta = map2_dbl(design, n10_infants, function(design, n){
+    read_csv(paste0(save_path, "bf", design, n, ".csv")) %>%
+      deframe() %>%
+      {sum(.>3)/length(.)}
+  }))
+# Plot power for each design
+ggplot(pwr.design,
+       aes(x = n10_infants,
+           y = beta,
+           colour = design)) +
+  geom_point() +
+  geom_line() +
+  geom_hline(yintercept = .8, linetype = "dashed") +
+  scale_color_brewer(palette = "Dark2",
+                     breaks = c("_ctrl_", "_no-ctrl_"),
+                     labels = c("control", "no control"))
+```
+
+Overall this doesn't make much sense. First the power doesn't grow as it should, which is most likely due to the fact that we only had 100 simulations for each $n$.
+
+Secondly, the power is much greater for the design with a control group than for the design without a control group, *for the same total number of participants*, which is clearly the most surprising result compared to what we know of frequentist power analysis. This might here be due to the differences in internal computation for the Intercept (tested in the no-control design) and for other model coefficients (such as `condition` tested in the control design). As such, these simulations seem to indicate that, for the question considered and the statistical approach taken, collecting and analysing a control group, with the same total number of participants, would greatly increase statistical power.
+
+Finally, to our surprise, the maximum number of participants simulated (490 participants) is only nearly sufficient to reach a power of 80%.
