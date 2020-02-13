@@ -582,7 +582,7 @@ We see that, despite the intercept estimate still being shifted away from zero, 
 
 One issue that was raised by the first round of reviews was the absence of a non-social control condition. There were theoretical reasons in favour and against the addition of this control condition, but a crucial factor to make a final decision was the impact this would have on statistical power, and therefore the impact on the number of participants required to evidence a true effect.
 
-To answer this question, we run by hand a Bayesian power analysis, following the structure described in [this blog post](https://solomonkurz.netlify.com/post/bayesian-power-analysis-part-i/). In short, we simulate data, run two models to be compared with a Bayes factor as previously, and count which percentage of models evidenced an effect as conveyed by a $b$-value greater than 3. To cut down on computation time (from a couple months to a day), we run 100 simulations for each tested number of participants $n$, and we conduct a dychotomic search between 100 and 500 participants to find the number of participants necessary to achieve roughly 80% power.
+To answer this question, we run by hand a Bayesian power analysis, following the structure described in [this blog post](https://solomonkurz.netlify.com/post/bayesian-power-analysis-part-i/). In short, we simulate data, run two models to be compared with a Bayes factor as previously, and count which percentage of models evidenced an effect as conveyed by a $b$-value greater than 3. To cut down on computation time (from a couple months to a day), we run 100 simulations for each tested number of participants $n$, and we conduct a dychotomic search between 200 and 600 participants to find the number of participants necessary to achieve roughly 80% power.
 
 ## Simulations
 
@@ -600,7 +600,7 @@ chose_helper ~ 1 +             age_days + (1 +             age_days | lab_id)
 ```{r echo=FALSE, message=FALSE, warning=FALSE}
 save_path <- "simulation_results/control/"
 # Running all the models takes days, and saves Bayes factors for later use
-run_models <- F
+run_models <- T
 if(run_models){
   n_sims <- 100
   # Control simulations
@@ -652,7 +652,7 @@ if(run_models){
                        control = list(adapt_delta = .9999,
                                       max_treedepth = 20))
   ## Define main simulation function
-  sim.ctrl <- function(seed, n_infants){
+  sim.ctrl <- function(seed, n_infants, alt = F){
     set.seed(seed)
     ### Generate dataset
     df <- tibble(lab_id = sample(1:n_labs, n_infants, replace = T) %>% as_factor(),
@@ -682,18 +682,24 @@ if(run_models){
                                             rnorm(n_infants,
                                                   mean = pr_helper,
                                                   sd = pr_helper_sd)))
-  ## Control priors
+  ## No-control priors
   priors.noctrl.H1 <- c(set_prior("normal(.5753641, .1)", # From Margoni & Surian, through logit
                                   class = "Intercept"),
                         set_prior("normal(0, .5)",
                                   class = "b"),
                         set_prior("student_t(3, 0, 2)",
                                   class = "sd"))
+  priors.noctrl.H1.alt <- c(set_prior("normal(.5753641, .1)", # From Margoni & Surian, through logit
+                                      class = "b", coef = "intercept"),
+                            set_prior("normal(0, .5)",
+                                      class = "b"),
+                            set_prior("student_t(3, 0, 2)",
+                                      class = "sd"))
   priors.noctrl.H0 <- c(set_prior("normal(0, .5)",
                                   class = "b"),
                         set_prior("student_t(3, 0, 2)",
                                   class = "sd"))
-  ## Control models
+  ## No-control models
   model.noctrl.H1 <- brm(chose_helper ~ 1 + z_age_days +
                            (1 + z_age_days | lab_id),
                          data = df.noctrl,
@@ -704,6 +710,16 @@ if(run_models){
                          save_all_pars = T,
                          control = list(adapt_delta = .9999,
                                         max_treedepth = 20))
+  model.noctrl.H1.alt <- brm(chose_helper ~ 0 + intercept + z_age_days +
+                               (0 + intercept + z_age_days | lab_id),
+                             data = df.noctrl,
+                             family = bernoulli,
+                             prior = priors.noctrl.H1.alt,
+                             iter = 10000,
+                             future = T,
+                             save_all_pars = T,
+                             control = list(adapt_delta = .9999,
+                                            max_treedepth = 20))
   model.noctrl.H0 <- brm(chose_helper ~ 0 + z_age_days +
                            (0 + z_age_days | lab_id),
                          data = df.noctrl,
@@ -715,7 +731,7 @@ if(run_models){
                          control = list(adapt_delta = .9999,
                                         max_treedepth = 20))
   ## Define main simulation function
-  sim.noctrl <- function(seed, n_infants){
+  sim.noctrl <- function(seed, n_infants, alt = F){
     set.seed(seed)
     ### Generate dataset
     df <- tibble(lab_id = sample(1:n_labs, n_infants, replace = T) %>% as_factor(),
@@ -727,7 +743,11 @@ if(run_models){
                                              mean = .5 + diff_helper*(condition=="social"),
                                              sd = pr_helper_sd)))
     ### Run models
-    m.H1 <- update(model.noctrl.H1, newdata = df, seed = seed)
+    if(alt){
+      m.H1 <- update(model.noctrl.H1.alt, newdata = df, seed = seed)
+    }else{
+      m.H1 <- update(model.noctrl.H1, newdata = df, seed = seed)
+    }
     m.H0 <- update(model.noctrl.H0, newdata = df, seed = seed)
     ### Bridge sample
     bridge.H1 <- bridge_sampler(m.H1, silent = T)
@@ -737,34 +757,38 @@ if(run_models){
     return(bf)
   }
   # Run all simulations
-  ## Min and max for dichotomic search
-  n10_infants_min <- 10
-  n10_infants_max <- 50
   ## Dichotomic search function
   search.dichotomy <- function(sim.fun, sim.type, n_min, n_max, pwr_goal = .8){
     n <- (n_min + n_max) %/% 2
     repeat{
       print(paste0("Dichotomic search: n=", n))
-      bfs <- future_map_dbl(1:n_sims, possibly(sim.fun, NA), n_infants = n*10,
+      bfs <- future_map_dbl(1:n_sims, possibly(sim.fun, NA),
+                            n_infants = n*10, alt = str_detect(sim.type, "alt"),
                             .progress = T)
+      filename <- paste0(save_path, "bf_", sim.type, "_", n, ".csv")
       bfs %>% enframe(name = NULL, value = "b.value") %>%
-        write_csv(paste0(save_path, "bf_", sim.type, "_", n, ".csv"))
+        write_csv(filename, append = file.exists(filename))
       pwr <- sum(bfs > 3, na.rm = T)/n_sims
       if(pwr < pwr_goal){
         n_min <- n
       }else{
         n_max <- n
       }
-      if(n_max - n_min == 1){break}
+      if(n_max - n_min <= 1){break}
       n <- (n_min + n_max) %/% 2
     }
     return(n)
   }
+  ## Min and max for dichotomic search
+  n10_infants_min <- 20
+  n10_infants_max <- 61
   ## Start search for control and no-control
   n_infants_crit.ctrl <-search.dichotomy(sim.ctrl, "ctrl",
                                          n10_infants_min, n10_infants_max)
   n_infants_crit.noctrl <- search.dichotomy(sim.noctrl, "no-ctrl",
                                             n10_infants_min, n10_infants_max)
+  n_infants_crit.noctrl.alt <- search.dichotomy(sim.noctrl, "no-ctrl_alt",
+                                                n10_infants_min, n10_infants_max)
   beep(8)
 }
 ```
@@ -775,11 +799,10 @@ We can then plot the computed power estimates (note that, because of the dychoto
 
 ```{r message=FALSE, warning=FALSE}
 # Read Bayes factors for ctrl and noctrl, compute power
-pwr.design <- tibble(design = c("_ctrl_", "_no-ctrl_")) %>%
+pwr.design <- tibble(design = c("_ctrl_", "_no-ctrl_", "_no-ctrl_alt_")) %>%
   mutate(n10_infants = map(design, function(design){
-    list.files(save_path, pattern = paste0(design)) %>%
-      str_split("[_\\.]") %>%
-      map_chr(`[`, 3) %>%
+    list.files(save_path, pattern = paste0(design, "[[:digit:]]")) %>%
+      str_extract("[:digit]+") %>%
       as.numeric()
   })) %>%
   unnest(n10_infants) %>%
