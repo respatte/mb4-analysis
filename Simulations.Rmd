@@ -802,7 +802,7 @@ We can then plot the computed power estimates (note that, because of the dychoto
 pwr.design <- tibble(design = c("_ctrl_", "_no-ctrl_", "_no-ctrl_alt_")) %>%
   mutate(n10_infants = map(design, function(design){
     list.files(save_path, pattern = paste0(design, "[[:digit:]]")) %>%
-      str_extract("[:digit]+") %>%
+      str_extract("[:digit:]+") %>%
       as.numeric()
   })) %>%
   unnest(n10_infants) %>%
@@ -820,8 +820,8 @@ ggplot(pwr.design,
   geom_line() +
   geom_hline(yintercept = .8, linetype = "dashed") +
   scale_color_brewer(palette = "Dark2",
-                     breaks = c("_ctrl_", "_no-ctrl_"),
-                     labels = c("control", "no control"))
+                     breaks = c("_ctrl_", "_no-ctrl_", "no-ctrl_alt_"),
+                     labels = c("control", "no control", "no control (alt.)"))
 ```
 
 Overall this doesn't make much sense. First the power doesn't grow as it should, which is most likely due to the fact that we only had 100 simulations for each $n$.
