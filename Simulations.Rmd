@@ -602,7 +602,7 @@ save_path <- "simulation_results/control/"
 # Running all the models takes days, and saves Bayes factors for later use
 run_models <- T
 if(run_models){
-  n_sims <- 100
+  n_sims <- 1000
   # Control simulations
   n_infants <- 10
   diff_helper <- pr_helper - .5
