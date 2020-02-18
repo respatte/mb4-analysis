@@ -602,7 +602,7 @@ save_path <- "simulation_results/control/"
 # Running all the models takes days, and saves Bayes factors for later use
 run_models <- T
 if(run_models){
-  n_sims <- 1000
+  n_sims <- 100
   # Control simulations
   n_infants <- 10
   diff_helper <- pr_helper - .5
@@ -734,14 +734,13 @@ if(run_models){
   sim.noctrl <- function(seed, n_infants, alt = F){
     set.seed(seed)
     ### Generate dataset
-    df <- tibble(lab_id = sample(1:n_labs, n_infants, replace = T) %>% as_factor(),
-                 age_days = sample(age_min:age_max, n_infants, replace = T),
-                 z_age_days = scale(age_days),
-                 condition = rep(c("non-social", "social"), each = n_infants/2),
-                 chose_helper = rbinom(n_infants, 1,
-                                       rnorm(n_infants,
-                                             mean = .5 + diff_helper*(condition=="social"),
-                                             sd = pr_helper_sd)))
+    df. <- tibble(lab_id = sample(1:n_labs, n_infants, replace = T) %>% as_factor(),
+                  age_days = sample(age_min:age_max, n_infants, replace = T),
+                  z_age_days = scale(age_days),
+                  chose_helper = rbinom(n_infants, 1,
+                                        rnorm(n_infants,
+                                              mean = pr_helper,
+                                              sd = pr_helper_sd)))
     ### Run models
     if(alt){
       m.H1 <- update(model.noctrl.H1.alt, newdata = df, seed = seed)
@@ -799,7 +798,7 @@ We can then plot the computed power estimates (note that, because of the dychoto
 
 ```{r message=FALSE, warning=FALSE}
 # Read Bayes factors for ctrl and noctrl, compute power
-pwr.design <- tibble(design = c("_ctrl_", "_no-ctrl_", "_no-ctrl_alt_")) %>%
+pwr.design <- tibble(design = as_factor(c("_ctrl_", "_no-ctrl_", "_no-ctrl_alt_"))) %>%
   mutate(n10_infants = map(design, function(design){
     list.files(save_path, pattern = paste0(design, "[[:digit:]]")) %>%
       str_extract("[:digit:]+") %>%
@@ -816,11 +815,12 @@ ggplot(pwr.design,
        aes(x = n10_infants,
            y = beta,
            colour = design)) +
+  theme(legend.position = "top") +
   geom_point() +
   geom_line() +
   geom_hline(yintercept = .8, linetype = "dashed") +
   scale_color_brewer(palette = "Dark2",
-                     breaks = c("_ctrl_", "_no-ctrl_", "no-ctrl_alt_"),
+                     breaks = c("_ctrl_", "_no-ctrl_", "_no-ctrl_alt_"),
                      labels = c("control", "no control", "no control (alt.)"))
 ```
 
