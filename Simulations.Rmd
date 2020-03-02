@@ -600,7 +600,7 @@ chose_helper ~ 1 +             age_days + (1 +             age_days | lab_id)
 ```{r echo=FALSE}
 save_path <- "simulation_results/control/"
 # Running all the models takes days, and saves Bayes factors for later use
-run_models <- T
+run_models <- F
 if(run_models){
   n_sims <- 100
   # Control simulations
@@ -803,9 +803,10 @@ pwr.design <- tibble(design = as_factor(c("_ctrl_", "_no-ctrl_"))) %>%
   unnest(n10_infants) %>%
   mutate(beta = map2_dbl(design, n10_infants, function(design, n){
     read_csv(paste0(save_path, "bf", design, n, ".csv")) %>%
+      drop_na() %>%
       deframe() %>%
-      {sum(.>3, na.rm = T)/length(.)}
-  }))
+      {if_else(length(.)<20, NA_real_, sum(.>3)/length(.))} # Remove values with too few samples
+    }))
 # Plot power for each design
 ggplot(pwr.design,
        aes(x = n10_infants,
@@ -820,8 +821,4 @@ ggplot(pwr.design,
                      labels = c("control", "no control"))
 ```
 
-Overall this doesn't make much sense. First the power doesn't grow as it should, which is most likely due to the fact that we only had 100 simulations for each $n$.
-
-Secondly, the power is much greater for the design with a control group than for the design without a control group, *for the same total number of participants*, which is clearly the most surprising result compared to what we know of frequentist power analysis. This might here be due to the differences in internal computation for the Intercept (tested in the no-control design) and for other model coefficients (such as `condition` tested in the control design). As such, these simulations seem to indicate that, for the question considered and the statistical approach taken, collecting and analysing a control group, with the same total number of participants, would greatly increase statistical power.
-
-Finally, to our surprise, the maximum number of participants simulated (490 participants) is only nearly sufficient to reach a power of 80%.
+We see that we would need around 135 participants to reach a power of 80% without a non-social control group, but more than 500 participants in total to reach the same power with a non-social control group.
