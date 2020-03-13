@@ -10,6 +10,7 @@ output:
 
 ```{r library imports, echo=1:10, message=FALSE, warning=FALSE}
 library(brms)
+library(lme4)
 library(bridgesampling)
 library(tidyverse)
 library(scales)
@@ -17,7 +18,7 @@ library(beepr)
 library(future)
 library(future.apply)
 library(furrr)
-plan(multiprocess, workers = 4) # Adapt to the number of cores you want to use
+plan(multiprocess, workers = 8) # Adapt to the number of cores you want to use
 source("StatTools.R")
 source("geom_flat_violin.R")
 
@@ -813,8 +814,7 @@ ggplot(pwr.design,
            y = beta,
            colour = design)) +
   theme(legend.position = "top") +
-  geom_point(position = position_dodge(width = 1)) +
-  geom_line(position = position_dodge(width = 1)) +
+  geom_line() +
   geom_hline(yintercept = .8, linetype = "dashed") +
   scale_color_brewer(palette = "Dark2",
                      breaks = c("_ctrl_", "_no-ctrl_"),
@@ -822,3 +822,151 @@ ggplot(pwr.design,
 ```
 
 We see that we would need around 135 participants to reach a power of 80% without a non-social control group, but more than 500 participants in total to reach the same power with a non-social control group.
+
+## Non-bayesian simulations
+
+The important increase in number of participants to test for one additional condition we saw above seems surprising, however a similar ratio is observed with a simpler frequentist simulation:
+
+```{r}
+n_sim <- 1000
+sims <- expand_grid(n_total = seq(50,500,10), 
+                    i = 1:n_sim) %>%
+  mutate(idx = 1:n()) %>%
+  split(.$idx) %>%
+  future_map_dfr(function (df) {
+    cntl_sim <- tibble(choice = c(rbinom(n = df$n_total/2, size = 1, p = pr_helper), 
+                                  rbinom(n = df$n_total/2, size = 1, p = .5)), 
+                       condition = c(rep("social", df$n_total/2), 
+                                     rep("nonsocial", df$n_total/2)))
+    nocntl_sim <- tibble(choice = rbinom(n = df$n_total, size = 1, p = pr_helper))
+    
+    cntl <- summary(glm(choice ~ condition, family = "binomial", data = cntl_sim))
+    nocntl <- summary(glm(choice ~ 1, family = "binomial", data = nocntl_sim))
+    
+    df$p_cntl <- cntl$coefficients["conditionsocial", "Pr(>|z|)"]
+    df$p_nocntl <- nocntl$coefficients["(Intercept)", "Pr(>|z|)"]
+    return(df)
+  })
+  
+sims %>%
+  group_by(n_total) %>%
+  summarise(cntl_power = mean(p_cntl < .05), 
+            nocntl_power = mean(p_nocntl < .05)) %>%
+  pivot_longer(names_to = "condition", values_to = "power", contains("power")) %>%
+  mutate(condition = ifelse(condition == "cntl_power", "With Social Control", "No Social Control")) %>%
+  ggplot(aes(x = n_total, y = power, col = condition)) + 
+  geom_line() + 
+  geom_hline(yintercept = .8, lty = 2) + 
+  xlab("N Total") + ylab("Power") +
+  theme(legend.position = "bottom")
+```
+
+Importantly, these simulations are much faster to run, and given the similar results in terms of power, we will use those to answer our next question, and extrapolate the results to Bayesian statistics.
+
+# Impact of between-lab variability on statistical power
+
+One important question that we did not address so far in these simulations is of the possible impact of between-lab variation on our results. To answer this question, we take the estimated effect sizes and confidence intervals width reported in Margoni and Surian (2018), treated in the same way as before to obtain a standard deviation, to add this variability to our data.
+
+```{r}
+lab_var <- tribble(
+  ~lab_id, ~estimate, ~lower, ~upper,
+  "lab1",  .92, .80, .99,
+  "lab2",  .75, .54, .96,
+  "lab3",  .69, .51, .88,
+  "lab4",  .77, .60, .94,
+  "lab5",  .78, .63, .93,
+  "lab6",  .50, .36, .68,
+  "lab7",  .69, .50, .88,
+  "lab8",  .71, .55, .86,
+  "lab9",  .80, .66, .94,
+  "lab10", .71, .55, .86,
+  "lab11", .74, .54, .93,
+  "lab12", .78, .65, .91,
+  "lab13", .50, .37, .63,
+  "lab14", .61, .47, .75,
+  "lab15", .30, .02, .58,
+  "lab16", .56, .39, .73,
+  "lab17", .79, .63, .94,
+  "lab18", .94, .82, .99,
+  "lab19", .73, .54, .91,
+  "lab20", .50, .37, .63,
+  "lab21", .65, .48, .81,
+  "lab22", .75, .58, .92,
+  "lab23", .59, .38, .81,
+  "lab24", .80, .60, .99,
+  "lab25", .75, .57, .93,
+  "lab26", .61, .48, .75
+  ) %>%
+  mutate(CI_spread = (upper-lower)/2,
+         stdev = CI_spread * sqrt(16) / 1.96) %>% # We assume 16 infants for each lab (conservative)
+  select(lab_id, estimate, stdev) %>%
+  mutate_at(vars(lab_id), as_factor)
+```
+
+For the simulations, we randomly sample a subset of these labs according to the number of participants, so that we have at least 16 participants for each lab, with a maximum number of 20 participating labs.
+
+```{r}
+save_path <- "simulation_results/lab_var/"
+n_sims <- 1000
+run_models <- F
+if(run_models){
+  sims <- expand_grid(n_total = seq(50,500,10),
+                      i = 1:n_sims) %>%
+    mutate(idx = 1:n()) %>%
+    split(.$idx) %>%
+    future_map_dfr(function(df){
+      set.seed(df$i)
+      n_labs <- min(20, trunc(df$n_total/16))
+      labs <- lab_var %>% sample_n(n_labs) %>% droplevels()
+      ctrl_sim <- tibble(lab_id = rep(labs$lab_id, each = 2, length.out = df$n_total),
+                         age_days = sample(age_min:age_max, df$n_total, replace = T),
+                         z_age_days = scale(age_days),
+                         condition = rep(c("non-social","social"), length.out = df$n_total)) %>%
+        left_join(labs) %>%
+        mutate(lab_pr_helper = if_else(condition == "social", estimate, .5),
+               pr_helper = rnorm(df$n_total, lab_pr_helper, stdev),
+               pr_helper = pmax(0, pmin(1, pr_helper)),
+               choice = rbinom(n = df$n_total, size = 1, p = pr_helper))
+      noctrl_sim <- tibble(lab_id = rep(labs$lab_id, each = 2, length.out = df$n_total),
+                           age_days = sample(age_min:age_max, df$n_total, replace = T),
+                           z_age_days = scale(age_days)) %>%
+        left_join(labs) %>%
+        mutate(pr_helper = rnorm(df$n_total, estimate, stdev),
+               pr_helper = pmax(0, pmin(1, pr_helper)),
+               choice = rbinom(n = df$n_total, size = 1, p = pr_helper))
+      
+      ctrl <- glmer(choice ~ 1 + condition + z_age_days +
+                      (1 + condition + z_age_days | lab_id),
+                    family = "binomial", data = ctrl_sim) %>%
+        summary() %>% pluck(coefficients)
+      noctrl <- glmer(choice ~ 1 + z_age_days +
+                        (1 + z_age_days | lab_id),
+                      family = "binomial", data = noctrl_sim) %>%
+        summary() %>% pluck(coefficients)
+      
+      df$p_ctrl <- ctrl["conditionsocial", "Pr(>|z|)"]
+      df$p_noctrl <- noctrl["(Intercept)", "Pr(>|z|)"]
+      return(df)
+    },
+    .progress = T)
+  write_csv(sims, paste0(save_path, "glmer_sims.csv"))
+}else{
+  sims <- read_csv(paste0(save_path, "glmer_sims.csv"))
+}
+
+sims %>%
+  group_by(n_total) %>%
+  summarise(ctrl_power = mean(p_ctrl < .05), 
+            noctrl_power = mean(p_noctrl < .05)) %>%
+  pivot_longer(names_to = "condition", values_to = "power", contains("power")) %>%
+  mutate(condition = ifelse(condition == "ctrl_power",
+                            "With Social Control",
+                            "No Social Control")) %>%
+  ggplot(aes(x = n_total, y = power, col = condition)) + 
+  geom_line() + 
+  geom_hline(yintercept = .8, lty = 2) + 
+  xlab("N Total") + ylab("Power") +
+  theme(legend.position = "bottom")
+```
+
+We see overall no evident effect of lab variability on power: it seems that the power for the no-control analysis decreased, while the power for the control analysis slightly increased.
