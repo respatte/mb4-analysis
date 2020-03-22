@@ -46,21 +46,6 @@ data_sim <- tibble(lab_id = rep(paste0("lab",1:n_labs),
                    pr_helper_rn = rnorm(n_infants, pr_helper_mean, pr_helper_sd),
                    pr_helper = pmax(0, pmin(1, pr_helper_rn)),
                    chose_helper = rbinom(n_infants, 1, pr_helper))
-
-# null_sims <- n_sims %>%
-#   future_replicate(tibble(lab_id = mapply(rep,
-#                                           paste0("lab",1:n_labs),
-#                                           infants_by_lab) %>%
-#                             unlist() %>%
-#                             as_factor(),
-#                           age_days = sample(age_min:age_max, n_infants,
-#                                             replace = T),
-#                           z_age_days = scale(age_days),
-#                           chose_helper = rbinom(n_infants, 1,
-#                                                 rnorm(n_infants,
-#                                                       mean = .5,
-#                                                       sd = pr_helper_sd))),
-#                    simplify = F)
 ```
 
 We define informative priors based on Margoni and Surian (2018) for the Intercept, mildly informative priors on the main effect of age (expected null), and priors more restrictive than the defaults on the standard deviation of random effects to help the model converge. Crucially, sampling is of insufficient quality without those priors, which leads to errors when bridge-sampling the posterior to compute Bayes factors. We will see however that those priors do not lead to ''significant'' findings when there the data are constructed with a true null effect.
@@ -92,7 +77,7 @@ We first test the differences between running Bayesian general linear models on 
 
 We fit a full model and a no-intercept model to the true effect data, use bridge sampling to estimate posterior distributions, and finally compare the two models to obtain a Bayes factor in favour of the full model over the no-intercept model. First, we get the full model and bridge sample it's posterior:
 
-```{r initialise_models full_raw_age, message=FALSE, warning=FALSE}
+```{r initialise_models full_raw_age, eval=FALSE}
 model.raw_age.full <- brm(chose_helper ~ age_days + (age_days | lab_id),
                           data = data_sim, family = bernoulli,
                           prior = priors.full, iter = 10000,
@@ -106,14 +91,6 @@ We then run the same code for the no-intercept model, that is, using the followi
 
 ```{r eval=FALSE}
 chose_helper ~ 0 + age_days + (0 + age_days | lab_id)
-```
-```{r initialise_models nointercept_raw_age, echo=FALSE, message=FALSE, warning=FALSE}
-model.raw_age.nointercept <- brm(chose_helper ~ 0 + age_days + (0 + age_days | lab_id),
-                                 data = data_sim, family = bernoulli,
-                                 prior = priors.nointercept, iter = 10000,
-                                 future = T, save_all_pars = T,
-                                 control = list(adapt_delta = .9999,
-                                                max_treedepth = 20))
 ```
 
 Finally, we compute a Bayes factor from the sampled posteriors.
@@ -129,14 +106,14 @@ save_path <- "simulation_results/raw_age/"
 # Run bayesian models, bridge-sample, then
 # save bf, parameter estimates, and HPDIs, to csv
 # Running the models takes several hours
-n_sims <- 80
-run_models <- T
+n_sims <- 32
+run_models <- F
 if(run_models){
   ## Initialise filenames for estimates and bf
   filename.est <- paste0(save_path, "estimates_full.csv")
   filename.bf <- paste0(save_path, "bayes_factors.csv")
   ## Initialise simulation rng seeds
-  n_previous <- ifelse(file.exists(filename.bf), length(read_lines(filename.bf)) - 1, 0)
+  n_previous <- ifelse(file.exists(filename.bf), length(read_lines(filename.bf))-1, 0)
   ## Initialise estimates column names if file doesn't exist
   if(!file.exists(filename.est)){
     estimates <- tibble(`Parameter` = character(),
@@ -149,6 +126,19 @@ if(run_models){
                         .rows = 0)
     write_csv(estimates, filename.est)
   }
+  ## Initialise models
+  model.raw_age.full <- brm(chose_helper ~ age_days + (age_days | lab_id),
+                            data = data_sim, family = bernoulli,
+                            prior = priors.full, iter = 10000,
+                            future = T, save_all_pars = T,
+                            control = list(adapt_delta = .9999,
+                                           max_treedepth = 20))
+  model.raw_age.nointercept <- brm(chose_helper ~ 0 + age_days + (0 + age_days | lab_id),
+                                   data = data_sim, family = bernoulli,
+                                   prior = priors.nointercept, iter = 10000,
+                                   future = T, save_all_pars = T,
+                                   control = list(adapt_delta = .9999,
+                                                  max_treedepth = 20))
   ## Define single simulation function
   sim.raw_age <- function(seed){
     set.seed(seed)
@@ -193,7 +183,9 @@ We can look at the parameter estimates and their credible intervals for all the 
 
 ```{r raw age estimates, message=FALSE, warning=FALSE}
 # Read estimates and HPDIs
-estimates.raw_age.full <- read_csv(paste0(save_path, "estimates_full.csv"))
+estimates.raw_age.full <- read_csv(paste0(save_path, "estimates_full.csv")) %>%
+  mutate_at(vars(Parameter), as_factor) %>% 
+  drop_na()
 # True simulated effects
 true_effects <- tibble(Parameter = c("Intercept", "age_days"),
                        Value = c(.5753641, 0))
@@ -208,12 +200,12 @@ ggplot(estimates.raw_age.full,
   scale_colour_brewer(palette = "Dark2", guide = FALSE) +
   facet_grid(cols = vars(Parameter), scales = "free_x") +
   geom_hline(data = true_effects, aes(yintercept = Value), linetype = "dashed") +
-  geom_pointrange()
+  geom_pointrange(fatten = .5, size = .2)
 ```
 
 We see that the estimate for age_days is pretty good, but the estimate for the intercept is much noisier. Notably, the estimate for `age_days` and it's HPDI are very close to zero as this parameter relates to raw age in days, which has values ranging from 165 to 320.
 
-## Using scaled and centred `z_age_days`
+## Using scaled and centred `z_ager_days`
 
 ### Models
 
@@ -225,14 +217,14 @@ save_path <- "simulation_results/scaled_age/"
 # Run bayesian models, bridge-sample, then
 # save bf, parameter estimates, and HPDIs, to csv
 # Running the models takes several hours
-n_sims <- 80
-run_models <- T
+n_sims <- 32
+run_models <- F
 if(run_models){
   ## Initialise filenames for estimates and bf
   filename.est <- paste0(save_path, "estimates_full.csv")
   filename.bf <- paste0(save_path, "bayes_factors.csv")
   ## Initialise simulation rng seeds
-  n_previous <- ifelse(file.exists(filename.bf), length(read_lines(filename.bf)) - 1, 0)
+  n_previous <- ifelse(file.exists(filename.bf), length(read_lines(filename.bf))-1, 0)
   ## Initialise estimates column names if file doesn't exist
   if(!file.exists(filename.est)){
     estimates <- tibble(`Parameter` = character(),
@@ -264,9 +256,9 @@ if(run_models){
     ### Generate dataset
     df <- tibble(lab_id = rep(paste0("lab",1:n_labs),
                               each = infants_by_lab),
-                 z_age_days = sample(age_min:age_max, n_infants,
+                 age_days = sample(age_min:age_max, n_infants,
                                    replace = T),
-                 z_z_age_days = scale(z_age_days),
+                 z_age_days = scale(age_days),
                  pr_helper_rn = rnorm(n_infants, pr_helper_mean, pr_helper_sd),
                  pr_helper = pmax(0, pmin(1, pr_helper_rn)),
                  chose_helper = rbinom(n_infants, 1, pr_helper))
@@ -302,7 +294,9 @@ We can look at the parameter estimates and their credible intervals for all the 
 
 ```{r scaled age estimates, echo=FALSE, message=FALSE, warning=FALSE}
 # Read estimates and HPDIs
-estimates.scaled_age.full <- read_csv(paste0(save_path,"estimates_full.csv"))
+estimates.scaled_age.full <- read_csv(paste0(save_path,"estimates_full.csv")) %>%
+  mutate_at(vars(Parameter), as_factor) %>% 
+  drop_na()
 # True simulated effects
 true_effects <- tibble(Parameter = c("Intercept", "z_age_days"),
                        Value = c(.5753641, 0))
@@ -317,7 +311,7 @@ ggplot(estimates.scaled_age.full,
   scale_colour_brewer(palette = "Dark2", guide = FALSE) +
   facet_grid(cols = vars(Parameter), scales = "free_x") +
   geom_hline(data = true_effects, aes(yintercept = Value), linetype = "dashed") +
-  geom_pointrange()
+  geom_pointrange(fatten = .5, size = .2)
 ```
 
 This time we see that parameter estimates for the intercept are much closer to the true effect and much more precise. Notably, this time the estimate for `z_age_days` is still centred on zero but much noisier, as this parameter now relates to one standard deviation in the sample for age in days, on average 40 days.
@@ -333,9 +327,9 @@ bf.raw_age.tmp <- bf.raw_age %>%
 bf.scaled_age.tmp <- bf.scaled_age %>%
   mutate(age = "scaled centred age")
 bf.all <- bind_rows(bf.raw_age.tmp, bf.scaled_age.tmp) %>%
-  mutate(log_bf = log1p(bf))
+  mutate(log_b.value = log1p(b.value))
 # Raincloud plot
-ggplot(bf.all, aes(x = age, y = log_bf,
+ggplot(bf.all, aes(x = age, y = log_b.value,
                    colour = age, fill = age)) +
   theme_bw() + ylab("Log Bayes factor [log(b+1)]") +
   coord_flip() + facet_grid(cols = vars(age), scales = "free_x") +
@@ -357,13 +351,13 @@ ggplot(bf.all, aes(x = age, y = log_bf,
 ```{r echo=FALSE, message=FALSE, warning=FALSE}
 evidence <- bf.all %>%
   group_by(age) %>%
-  summarise(n_H1 = sum(bf >= 3),
-            n_H0 = sum(bf <= 1/3))
-n_H1.raw_age <- evidence %>% subset(age == "raw age", n_H1) %>% as.numeric()
-n_H0.raw_age <- evidence %>% subset(age == "raw age", n_H0) %>% as.numeric()
+  summarise(p_H1 = mean(b.value >= 3),
+            p_H0 = mean(b.value <= 1/3))
+p_H1.raw_age <- evidence %>% subset(age == "raw age", p_H1) %>% as.numeric()
+p_H0.raw_age <- evidence %>% subset(age == "raw age", p_H0) %>% as.numeric()
 ```
 
-Clearly, we see that models using raw `age_days` do not detect the true simulated effect, with only `r n_H1.raw_age` models resulting in a $b\geq3$, and sometimes even give evidence for the null with a Bayes factor $b\leq {}^1\!/_3$ (*n*=`r n_H0.raw_age`). On the other hand, models using scaled and centred `z_age_days` reliably provided robust evidence for the true simulated effect.
+Clearly, we see that models using raw `age_days` do not detect the true simulated effect, with only `r p_H1.raw_age*100`% of the models resulting in a $b\geq3$, and sometimes even give evidence for the null with a Bayes factor $b\leq {}^1\!/_3$ (`r p_H0.raw_age*100`%). On the other hand, models using scaled and centred `z_age_days` reliably provided robust evidence for the true simulated effect.
 
 Thus, we use `z_age_days` in the MB4 analysis script.
 
@@ -381,26 +375,14 @@ save_path <- "simulation_results/null_age/"
 # Run bayesian models, bridge-sample, then
 # save bf, parameter estimates, and HPDIs, to csv
 # Running the models takes several hours
-n_sims <- 80
-run_models <- T
+n_sims <- 32
+run_models <- F
 if(run_models){
   ## Initialise filenames for estimates and bf
   filename.est <- paste0(save_path, "estimates_full.csv")
   filename.bf <- paste0(save_path, "bayes_factors.csv")
   ## Initialise simulation rng seeds
-  n_previous <- ifelse(file.exists(filename.bf), length(read_lines(filename.bf)) - 1, 0)
-  ## Initialise estimates column names if file doesn't exist
-  if(!file.exists(filename.est)){
-    estimates <- tibble(`Parameter` = character(),
-                        `Estimate` = double(),
-                        `Est. Error` = double(),
-                        `lower` = double(),
-                        `upper` = double(),
-                        `95% CI` = character(),
-                        `sim_id` = character(),
-                        .rows = 0)
-    write_csv(estimates, filename.est)
-  }
+  n_previous <- ifelse(file.exists(filename.bf), length(read_lines(filename.bf))-1, 0)
   ## Initialise models (full model already initialised)
   model.scaled_age.noage <- brm(chose_helper ~ 1 + (1 | lab_id),
                           data = data_sim, family = bernoulli,
@@ -427,7 +409,7 @@ if(run_models){
     bridge.full <- bridge_sampler(m.full, silent = T)
     bridge.noage <- bridge_sampler(m.noage, silent = T)
     ### Bayes factor
-    bf <- bayes_factor(bridge.full, bridge.nointercept)$bf
+    bf <- bayes_factor(bridge.full, bridge.noage)$bf
     return(bf)
   }
   ## Get new Bayes factors
@@ -450,16 +432,16 @@ We can then plot those *b*-values, with dashed lines representing the typical de
 # Get Bayes factors into a proper tibble
 bf.null_age <- bf.null_age %>%
   mutate(test = "no age",
-         log_bf = log1p(bf))
+         log_b.value = log1p(b.value))
 # Raincloud plot
-ggplot(bf.null_age, aes(x = test, y = log_bf,
+ggplot(bf.null_age, aes(x = test, y = log_b.value,
                    colour = test, fill = test)) +
   theme_bw() + ylab("Log Bayes factor [log(b+1)]") + coord_flip() +
   theme(legend.position = "top",
         axis.title.y = element_blank(),
         axis.ticks.y = element_blank(),
         axis.text.y = element_blank()) +
-  geom_hline(yintercept = c(log1p(1/3), log1p(3)), linetype = "dashed") +
+  #geom_hline(yintercept = c(log1p(1/3), log1p(3)), linetype = "dashed") +
   geom_flat_violin(position = position_nudge(x = .2),
                    colour = "black", alpha = .5, width = .7) +
   geom_point(position = position_jitter(width = .15),
@@ -472,10 +454,10 @@ ggplot(bf.null_age, aes(x = test, y = log_bf,
 
 ```{r echo=FALSE, message=FALSE, warning=FALSE}
 evidence <- bf.null_age %>%
-  summarise(n_H1 = sum(bf >= 3),
-            n_H0 = sum(bf <= 1/3))
-n_H1.null_age <- evidence %>% select(n_H1) %>% as.numeric()
-n_H0.null_age <- evidence %>% select(n_H0) %>% as.numeric()
+  summarise(p_H1 = mean(b.value >= 3),
+            p_H0 = mean(b.value <= 1/3))
+p_H1.null_age <- evidence %>% select(p_H1) %>% as.numeric()
+p_H0.null_age <- evidence %>% select(p_H0) %>% as.numeric()
 ```
 
 Here, we see that the *b*-values consistently indicate that a true null effect is better supported by the data.
@@ -494,14 +476,14 @@ save_path <- "simulation_results/true_null/"
 # Run bayesian models, bridge-sample, then
 # save bf, parameter estimates, and HPDIs, to csv
 # Running the models takes several hours
-n_sims <- 80
-run_models <- T
+n_sims <- 32
+run_models <- F
 if(run_models){
   ## Initialise filenames for estimates and bf
   filename.est <- paste0(save_path, "estimates_full.csv")
   filename.bf <- paste0(save_path, "bayes_factors.csv")
   ## Initialise simulation rng seeds
-  n_previous <- ifelse(file.exists(filename.bf), length(read_lines(filename.bf)) - 1, 0)
+  n_previous <- ifelse(file.exists(filename.bf), length(read_lines(filename.bf))-1, 0)
   ## Initialise estimates column names if file doesn't exist
   if(!file.exists(filename.est)){
     estimates <- tibble(`Parameter` = character(),
@@ -558,7 +540,9 @@ As a first sanity check, we can plot the parameter estimates for the full model,
 
 ```{r true null estimates, echo=FALSE, message=FALSE, warning=FALSE}
 # Get estimates and HPDIs
-estimates.true_null.full <- read_csv(paste0(save_path, "estimates_full.csv"))
+estimates.true_null.full <- read_csv(paste0(save_path, "estimates_full.csv")) %>%
+  mutate_at(vars(Parameter), as_factor) %>%
+  drop_na()
 # True simulated effects
 true_effects <- tibble(Parameter = c("Intercept", "z_age_days"),
                        Value = c(0, 0))
@@ -573,7 +557,7 @@ ggplot(estimates.true_null.full,
   scale_colour_brewer(palette = "Dark2", guide = FALSE) +
   facet_grid(cols = vars(Parameter), scales = "free_x") +
   geom_hline(data = true_effects, aes(yintercept = Value), linetype = "dashed") +
-  geom_pointrange()
+  geom_pointrange(fatten = .5, size = .2)
 ```
 
 First, we see that overall the informative priors have indeed shifted the estimated Intercept away from zero. More precisely however, the addition of true null data has shifted our initial beliefs (informative priors) closer to a zero intercept, and additional data would further change our knowledge through Bayesian update.
@@ -584,9 +568,9 @@ We can then plot the *b*-values associated with those models:
 # Get Bayes factors into a proper tibble
 bf.true_null <- bf.true_null %>%
   mutate(test = "true null",
-         log_bf = log1p(bf))
+         log_b.value = log1p(b.value))
 # Raincloud plot
-ggplot(bf.true_null, aes(x = test, y = log_bf,
+ggplot(bf.true_null, aes(x = test, y = log_b.value,
                    colour = test, fill = test)) +
   theme_bw() + ylab("Log Bayes factor [log(b+1)]") + coord_flip() +
   theme(legend.position = "top",
@@ -606,13 +590,13 @@ ggplot(bf.true_null, aes(x = test, y = log_bf,
 
 ```{r echo=FALSE, message=FALSE, warning=FALSE}
 evidence <- bf.true_null %>%
-  summarise(n_H1 = sum(bf >= 3),
-            n_H0 = sum(bf <= 1/3))
-n_H1.true_null <- evidence %>% select(n_H1) %>% as.numeric()
-n_H0.true_null <- evidence %>% select(n_H0) %>% as.numeric()
+  summarise(p_H1 = mean(b.value >= 3),
+            p_H0 = mean(b.value <= 1/3))
+p_H1.true_null <- evidence %>% select(p_H1) %>% as.numeric()
+p_H0.true_null <- evidence %>% select(p_H0) %>% as.numeric()
 ```
 
-We see that, despite the intercept estimate still being shifted away from zero, the Bayesian hypothesis testing consistently tells us that the null hypothesis is better supported by the data at hand. Given that we know the data to be constructed around a true null effect, this shows that the informative priors constructed from Margoni and Surian (2018) did not impact the conclusions we would draw from true null data.
+We see that, despite the intercept estimate still being shifted away from zero, the Bayesian hypothesis testing consistently tells us that the null hypothesis is better supported by the data at hand (`r p_H0.true_null*100`% of the time). Given that we know the data to be constructed around a true null effect, this shows that the informative priors constructed from Margoni and Surian (2018) did not impact the conclusions we would draw from true null data.
 
 # Cost, in terms of statistical power, of adding a control condition
 
@@ -840,7 +824,7 @@ pwr.design <- tibble(design = as_factor(c("_ctrl_", "_no-ctrl_"))) %>%
     read_csv(paste0(save_path, "bf", design, n, ".csv")) %>%
       drop_na() %>%
       deframe() %>%
-      {if_else(length(.)<20, NA_real_, sum(.>3)/length(.))} # Remove values with too few samples
+      {if_else(length(.)<20, NA_real_, sum(.>3)/length(.))} # Remove if too few samples
     }))
 # Plot power for each design
 ggplot(pwr.design,
@@ -861,7 +845,7 @@ We see that we would need around 135 participants to reach a power of 80% withou
 
 The important increase in number of participants to test for one additional condition we saw above seems surprising, however a similar ratio is observed with a simpler frequentist simulation:
 
-```{r}
+```{r message=FALSE, warning=FALSE}
 run_models <- F
 if(run_models){
   n_sim <- 1000
@@ -870,11 +854,11 @@ if(run_models){
     mutate(idx = 1:n()) %>%
     split(.$idx) %>%
     future_map_dfr(function (df) {
-      cntl_sim <- tibble(choice = c(rbinom(n = df$n_total/2, size = 1, p = pr_helper_mean), 
-                                    rbinom(n = df$n_total/2, size = 1, p = .5)), 
+      cntl_sim <- tibble(choice = c(rbinom(df$n_total/2, 1, pr_helper_mean), 
+                                    rbinom(df$n_total/2, 1, .5)), 
                          condition = c(rep("social", df$n_total/2), 
                                        rep("nonsocial", df$n_total/2)))
-      nocntl_sim <- tibble(choice = rbinom(n = df$n_total, size = 1, p = pr_helper_mean))
+      nocntl_sim <- tibble(choice = rbinom(df$n_total, 1, pr_helper_mean))
       
       cntl <- summary(glm(choice ~ condition, family = "binomial", data = cntl_sim))
       nocntl <- summary(glm(choice ~ 1, family = "binomial", data = nocntl_sim))
@@ -893,7 +877,9 @@ pwr.ctrl %>%
   summarise(cntl_power = mean(p_cntl < .05), 
             nocntl_power = mean(p_nocntl < .05)) %>%
   pivot_longer(names_to = "condition", values_to = "power", contains("power")) %>%
-  mutate(condition = ifelse(condition == "cntl_power", "With Social Control", "No Social Control")) %>%
+  mutate(condition = ifelse(condition == "cntl_power",
+                            "With Social Control",
+                            "No Social Control")) %>%
   ggplot(aes(x = n_total, y = power, col = condition)) + 
   geom_line() + 
   geom_hline(yintercept = .8, lty = 2) + 
@@ -905,7 +891,7 @@ Importantly, these simulations are much faster to run, and given the similar res
 
 # Impact of between-lab variability on statistical power
 
-One important question that we did not address so far in these simulations is of the possible impact of between-lab variation on our results. To answer this question, we take the estimated effect sizes and confidence intervals width reported in Margoni and Surian (2018), treated in the same way as before to obtain a standard deviation, to add this variability to our data.
+One important question that we did not address so far in these simulations is of the possible impact of between-lab variation on our results. To answer this question, we take the estimated effect sizes and confidence intervals width reported in Margoni and Surian (2018), treated in the same way as before to obtain a standard deviation, to add this variability to our data. To compute the standard deviation from the CI, we assume 16 participants for each lab, which is a conservative measures as more infants would result in a smaller standard deviation value computed from the CI.
 
 ```{r}
 lab_var <- tribble(
@@ -938,14 +924,14 @@ lab_var <- tribble(
   "lab26", .61, .48, .75
   ) %>%
   mutate(CI_spread = (upper-lower)/2,
-         stdev = CI_spread * sqrt(16) / 1.96) %>% # We assume 16 infants for each lab (conservative)
+         stdev = CI_spread * sqrt(16) / 1.96) %>% # We assume 16 infants for each lab
   select(lab_id, estimate, stdev) %>%
   mutate_at(vars(lab_id), as_factor)
 ```
 
 For the simulations, we randomly sample a subset of these labs according to the number of participants, so that we have at least 16 participants for each lab, with a maximum number of 20 participating labs.
 
-```{r}
+```{r message=FALSE, warning=FALSE}
 save_path <- "simulation_results/lab_var/"
 run_models <- F
 if(run_models){
@@ -961,7 +947,8 @@ if(run_models){
       ctrl_sim <- tibble(lab_id = rep(labs$lab_id, each = 2, length.out = df$n_total),
                          age_days = sample(age_min:age_max, df$n_total, replace = T),
                          z_age_days = scale(age_days),
-                         condition = rep(c("non-social","social"), length.out = df$n_total)) %>%
+                         condition = rep(c("non-social","social"),
+                                         length.out = df$n_total)) %>%
         left_join(labs) %>%
         mutate(lab_pr_helper = if_else(condition == "social", estimate, .5),
                pr_helper_rn = rnorm(df$n_total, lab_pr_helper, stdev),
@@ -1009,4 +996,4 @@ pwr.lab_var %>%
   theme(legend.position = "bottom")
 ```
 
-We see overall no evident effect of lab variability on power: it seems that the power for the no-control analysis decreased, while the power for the control analysis slightly increased.
+We see overall no evident effect of lab variability on power: it seems, if anything, that the power for the no-control analysis decreased, while the power for the control analysis slightly increased.
