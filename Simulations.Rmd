@@ -31,8 +31,8 @@ For the "true effect" data set, we use the estimated true effect size from a rec
 n_labs <- 15
 infants_by_lab <- 32
 n_infants <- n_labs * infants_by_lab
-age_min <- 165
-age_max <- 320
+age_min <- 167
+age_max <- 319
 pr_helper_mean <- 0.64  # From Margoni & Surian 2018 (estimated true effect size)
 diff_pr_helper <- pr_helper_mean - .5
 pr_helper_sd <- 0.1     # From Margoni & Surian 2018 (CI*sqrt(mean(N))/Z(95))
@@ -186,21 +186,30 @@ We can look at the parameter estimates and their credible intervals for all the 
 estimates.raw_age.full <- read_csv(paste0(save_path, "estimates_full.csv")) %>%
   mutate_at(vars(Parameter), as_factor) %>% 
   drop_na()
+estimates.ordered <- estimates.raw_age.full %>%
+  subset(Parameter == "Intercept", select = c(Estimate, sim_id)) %>%
+  arrange(Estimate) %>%
+  rownames_to_column(var = "ordered") %>%
+  mutate_at("ordered", as.numeric) %>%
+  select(c(sim_id, ordered))
+estimates.raw_age.full <- left_join(estimates.raw_age.full, estimates.ordered)
 # True simulated effects
 true_effects <- tibble(Parameter = c("Intercept", "age_days"),
                        Value = c(.5753641, 0))
 # Plot
 ggplot(estimates.raw_age.full,
-       aes(x = sim_id, y = Estimate,
+       aes(x = ordered, y = Estimate,
            ymin = lower, ymax = upper,
-           colour = Parameter)) +
+           colour = Parameter, fill = Parameter)) +
   xlab("Simulation") + ylab("Parameter Estimate") + coord_flip() +
   theme(axis.text.y = element_blank(),
         axis.ticks.y = element_blank()) +
   scale_colour_brewer(palette = "Dark2", guide = FALSE) +
+  scale_fill_brewer(palette = "Dark2", guide = FALSE) +
   facet_grid(cols = vars(Parameter), scales = "free_x") +
   geom_hline(data = true_effects, aes(yintercept = Value), linetype = "dashed") +
-  geom_pointrange(fatten = .5, size = .2)
+  geom_line() +
+  geom_ribbon(alpha = .5, colour = NA)
 ```
 
 We see that the estimate for age_days is pretty good, but the estimate for the intercept is much noisier. Notably, the estimate for `age_days` and it's HPDI are very close to zero as this parameter relates to raw age in days, which has values ranging from 165 to 320.
